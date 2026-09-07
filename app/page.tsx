@@ -6,9 +6,6 @@ import {
   Settings, ShoppingBasket, Sun, WalletCards,
 } from 'lucide-react';
 import { type SyntheticEvent, useEffect, useMemo, useState } from 'react';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 
 const navItems = [
   { label: 'Dashboard', icon: Home },
@@ -212,31 +209,33 @@ export default function HomeInventory() {
         </div>
       </section>
 
-      <Dialog onOpenChange={setItemDialogOpen} open={itemDialogOpen}>
-        <DialogContent className="inventory-dialog">
-          <DialogHeader><DialogTitle>Add inventory item</DialogTitle><DialogDescription>Record the quantity, location and expiry date.</DialogDescription></DialogHeader>
+      {itemDialogOpen && <div className="dialog-overlay">
+        <dialog aria-labelledby="item-dialog-title" className="inventory-dialog" open>
+          <button aria-label="Close add item dialog" className="dialog-close" onClick={() => setItemDialogOpen(false)} type="button">×</button>
+          <header className="dialog-header"><h2 id="item-dialog-title">Add inventory item</h2><p>Record the quantity, location and expiry date.</p></header>
           <form className="dialog-form" onSubmit={addInventoryItem}>
-            <label htmlFor="item-name">Item name<Input id="item-name" name="name" placeholder="e.g. Basmati rice" required /></label>
-            <div className="form-grid"><label htmlFor="item-quantity">Quantity<Input id="item-quantity" min="0.01" name="quantity" placeholder="1" required step="0.01" type="number" /></label><label htmlFor="item-unit">Unit<NativeSelect className="select-full" id="item-unit" name="unit" required><NativeSelectOption value="kg">kg</NativeSelectOption><NativeSelectOption value="L">L</NativeSelectOption><NativeSelectOption value="pcs">pcs</NativeSelectOption><NativeSelectOption value="pack">pack</NativeSelectOption></NativeSelect></label></div>
-            <div className="form-grid"><label htmlFor="item-category">Category<NativeSelect className="select-full" id="item-category" name="category" required><NativeSelectOption>Pantry</NativeSelectOption><NativeSelectOption>Dairy & eggs</NativeSelectOption><NativeSelectOption>Vegetables</NativeSelectOption><NativeSelectOption>Household</NativeSelectOption></NativeSelect></label><label htmlFor="item-location">Location<NativeSelect className="select-full" id="item-location" name="location" required><NativeSelectOption>Kitchen</NativeSelectOption><NativeSelectOption>Fridge</NativeSelectOption><NativeSelectOption>Freezer</NativeSelectOption><NativeSelectOption>Storage</NativeSelectOption></NativeSelect></label></div>
-            <label htmlFor="item-expiry">Expiry date <span>(optional)</span><Input id="item-expiry" name="expiryDate" type="date" /></label>
+            <label htmlFor="item-name">Item name<input id="item-name" name="name" placeholder="e.g. Basmati rice" required /></label>
+            <div className="form-grid"><label htmlFor="item-quantity">Quantity<input id="item-quantity" min="0.01" name="quantity" placeholder="1" required step="0.01" type="number" /></label><label htmlFor="item-unit">Unit<select id="item-unit" name="unit" required><option value="kg">kg</option><option value="L">L</option><option value="pcs">pcs</option><option value="pack">pack</option></select></label></div>
+            <div className="form-grid"><label htmlFor="item-category">Category<select id="item-category" name="category" required><option>Pantry</option><option>Dairy & eggs</option><option>Vegetables</option><option>Household</option></select></label><label htmlFor="item-location">Location<select id="item-location" name="location" required><option>Kitchen</option><option>Fridge</option><option>Freezer</option><option>Storage</option></select></label></div>
+            <label htmlFor="item-expiry">Expiry date <span>(optional)</span><input id="item-expiry" name="expiryDate" type="date" /></label>
             <button className="primary-button dialog-submit" type="submit">Save item</button>
           </form>
-        </DialogContent>
-      </Dialog>
+        </dialog>
+      </div>}
 
-      <Dialog onOpenChange={setExpenseDialogOpen} open={expenseDialogOpen}>
-        <DialogContent className="inventory-dialog">
-          <DialogHeader><DialogTitle>Add expense</DialogTitle><DialogDescription>Record a household payment in SAR.</DialogDescription></DialogHeader>
+      {expenseDialogOpen && <div className="dialog-overlay">
+        <dialog aria-labelledby="expense-dialog-title" className="inventory-dialog" open>
+          <button aria-label="Close add expense dialog" className="dialog-close" onClick={() => setExpenseDialogOpen(false)} type="button">×</button>
+          <header className="dialog-header"><h2 id="expense-dialog-title">Add expense</h2><p>Record a household payment in SAR.</p></header>
           <form className="dialog-form" onSubmit={addExpense}>
-            <label htmlFor="expense-amount">Amount (SAR)<Input id="expense-amount" min="0.01" name="amount" placeholder="0.00" required step="0.01" type="number" /></label>
-            <label htmlFor="expense-category">Category<NativeSelect className="select-full" id="expense-category" name="category" required><NativeSelectOption>Groceries</NativeSelectOption><NativeSelectOption>Utilities</NativeSelectOption><NativeSelectOption>Transport</NativeSelectOption><NativeSelectOption>Healthcare</NativeSelectOption><NativeSelectOption>Household</NativeSelectOption></NativeSelect></label>
-            <label htmlFor="expense-date">Date<Input defaultValue="2026-09-07" id="expense-date" name="spentAt" required type="date" /></label>
-            <label htmlFor="expense-note">Note <span>(optional)</span><Input id="expense-note" name="note" placeholder="What was this for?" /></label>
+            <label htmlFor="expense-amount">Amount (SAR)<input id="expense-amount" min="0.01" name="amount" placeholder="0.00" required step="0.01" type="number" /></label>
+            <label htmlFor="expense-category">Category<select id="expense-category" name="category" required><option>Groceries</option><option>Utilities</option><option>Transport</option><option>Healthcare</option><option>Household</option></select></label>
+            <label htmlFor="expense-date">Date<input defaultValue="2026-09-07" id="expense-date" name="spentAt" required type="date" /></label>
+            <label htmlFor="expense-note">Note <span>(optional)</span><input id="expense-note" name="note" placeholder="What was this for?" /></label>
             <button className="primary-button dialog-submit" type="submit">Save expense</button>
           </form>
-        </DialogContent>
-      </Dialog>
+        </dialog>
+      </div>}
     </main>
   );
 }

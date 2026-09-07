@@ -97,7 +97,10 @@ th { padding: 10px 16px; color: var(--muted); background: var(--surface-soft); t
 .check-list .completed { color: var(--muted); text-decoration: line-through; }
 .notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: -8px 0 14px; padding: 11px 14px; border: 1px solid color-mix(in srgb,var(--primary) 30%,var(--border)); border-radius: 10px; color: var(--primary); background: var(--primary-soft); font-size: .82rem; font-weight: 620; }
 .notice button { border: 0; color: inherit; background: transparent; font-size: 1.2rem; line-height: 1; }
-.inventory-dialog { max-width: 470px !important; padding: 22px !important; border: 1px solid var(--border); background: var(--surface) !important; color: var(--foreground) !important; box-shadow: 0 24px 80px rgba(0,0,0,.22); }
+.dialog-overlay { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgba(0,0,0,.24); backdrop-filter: blur(4px); }
+.inventory-dialog { position: relative; width: min(470px,100%); padding: 22px; border: 1px solid var(--border); border-radius: 15px; background: var(--surface); color: var(--foreground); box-shadow: 0 24px 80px rgba(0,0,0,.22); }
+.dialog-close { position: absolute; top: 12px; right: 12px; display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); background: var(--surface-soft); font-size: 1.2rem; }
+.dialog-header h2 { margin: 0; font-size: 1.05rem; }.dialog-header p { margin: 7px 34px 15px 0; color: var(--muted); font-size: .8rem; }
 .dialog-form { display: grid; gap: 15px; margin-top: 4px; }
 .dialog-form label { display: grid; gap: 7px; color: var(--foreground); font-size: .78rem; font-weight: 680; }
 .dialog-form label span { color: var(--muted); font-weight: 400; }
