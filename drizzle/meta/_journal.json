@@ -8,6 +8,13 @@
       "when": 1788810242372,
       "tag": "0000_cloudy_luke_cage",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788846330847,
+      "tag": "0001_military_william_stryker",
+      "breakpoints": true
     }
   ]
 }

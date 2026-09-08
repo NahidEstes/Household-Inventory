@@ -9,7 +9,9 @@ export const inventoryItems = sqliteTable('inventory_items', {
   unit: text('unit').notNull(),
   location: text('location').notNull(),
   expiryDate: text('expiry_date'),
-  createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: text('created_at')
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const expenses = sqliteTable('expenses', {
@@ -18,12 +20,25 @@ export const expenses = sqliteTable('expenses', {
   category: text('category').notNull(),
   note: text('note'),
   spentAt: text('spent_at').notNull(),
-  createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: text('created_at')
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const shoppingItems = sqliteTable('shopping_items', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),
   completed: integer('completed', { mode: 'boolean' }).notNull().default(false),
-  createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: text('created_at')
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const householdSettings = sqliteTable('household_settings', {
+  id: integer('id').primaryKey(),
+  householdName: text('household_name').notNull().default('My Household'),
+  monthlyBudget: real('monthly_budget').notNull().default(30000),
+  updatedAt: text('updated_at')
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
 });
