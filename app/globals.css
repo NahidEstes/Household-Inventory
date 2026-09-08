@@ -684,7 +684,8 @@ td {
   font-weight: 400;
 }
 .dialog-form input,
-.dialog-form select {
+.dialog-form select,
+.dialog-form textarea {
   height: 42px;
   border-color: var(--border);
   background: var(--surface-soft);
@@ -753,6 +754,7 @@ td {
 .toolbar select,
 .dialog-form select,
 .dialog-form input,
+.dialog-form textarea,
 .settings-form input,
 .inline-add input {
   min-height: 42px;
@@ -766,6 +768,7 @@ td {
 .toolbar select:focus,
 .dialog-form select:focus,
 .dialog-form input:focus,
+.dialog-form textarea:focus,
 .settings-form input:focus,
 .inline-add input:focus {
   border-color: var(--primary);
@@ -934,6 +937,345 @@ td {
   grid-template-columns: minmax(0, 1fr) 330px;
   gap: 18px;
   align-items: start;
+}
+
+.meal-planner-view {
+  display: grid;
+  gap: 14px;
+}
+.meal-week-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -70px;
+  margin-bottom: 14px;
+  padding-right: 380px;
+  pointer-events: none;
+}
+.week-navigator {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 7px 0 13px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+}
+.week-navigator strong {
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+.week-navigator button {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+}
+.week-navigator button:hover {
+  background: var(--surface-soft);
+  color: var(--foreground);
+}
+.meal-week-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(150px, 1fr));
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.meal-day-card {
+  min-height: 290px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.meal-day-card.today {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+}
+.meal-day-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 14px 11px;
+  border-bottom: 1px solid var(--border);
+}
+.meal-day-card > header div {
+  display: grid;
+  gap: 3px;
+}
+.meal-day-card > header strong {
+  font-size: 0.94rem;
+}
+.meal-day-card > header span {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.meal-day-card > header button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--primary);
+  background: var(--surface-soft);
+  font-size: 1.15rem;
+}
+.meal-day-list {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+}
+.meal-tile {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  padding: 11px 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface-soft);
+  text-align: center;
+}
+.meal-tile > strong {
+  font-size: 0.8rem;
+  line-height: 1.25;
+}
+.meal-tile > small {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+.meal-thumb {
+  width: 58px;
+  height: 58px;
+  border-radius: 14px;
+  object-fit: cover;
+}
+.meal-thumb-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+.meal-thumb-image {
+  display: block;
+  background-position: center;
+  background-size: cover;
+}
+.meal-stock {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+.meal-stock.ready,
+.meal-row em.ready {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+.meal-stock.missing,
+.meal-row em.missing {
+  color: #d99018;
+  background: color-mix(in srgb, #d99018 14%, transparent);
+}
+.meal-tile-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.meal-tile:hover .meal-tile-actions,
+.meal-tile:focus-within .meal-tile-actions {
+  opacity: 1;
+}
+.meal-tile-actions button {
+  width: 25px;
+  height: 25px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--muted);
+  background: var(--surface);
+}
+.empty-meal-day {
+  min-height: 190px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  border: 1px dashed var(--border);
+  border-radius: 11px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 0.76rem;
+}
+.empty-meal-day:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+.meal-details-grid {
+  display: grid;
+  grid-template-columns: 1.08fr 1fr 0.92fr;
+  gap: 14px;
+}
+.compact-meal-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+.meal-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+.meal-row .meal-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+}
+.meal-row > span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.meal-row > span strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8rem;
+}
+.meal-row > span small {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+.meal-row em {
+  padding: 5px 8px;
+  border-radius: 999px;
+  font-size: 0.64rem;
+  font-style: normal;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.meal-quick-actions {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+.meal-quick-actions .panel-heading {
+  margin-bottom: 8px;
+}
+.meal-quick-actions > button {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--primary);
+  background: var(--surface-soft);
+  text-align: left;
+}
+.meal-quick-actions > button > span {
+  display: grid;
+  gap: 3px;
+  color: var(--foreground);
+}
+.meal-quick-actions > button strong {
+  font-size: 0.77rem;
+}
+.meal-quick-actions > button small {
+  color: var(--muted);
+  font-size: 0.67rem;
+}
+.meal-dialog {
+  width: min(920px, calc(100vw - 30px));
+  max-height: calc(100vh - 34px);
+  overflow: auto;
+}
+.dialog-form textarea {
+  width: 100%;
+  min-height: 70px;
+  resize: vertical;
+}
+.ingredient-builder {
+  display: grid;
+  gap: 10px;
+  padding-top: 5px;
+}
+.ingredient-builder-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ingredient-builder-heading > span {
+  display: grid;
+  gap: 3px;
+}
+.ingredient-builder-heading small {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+.ingredient-builder-heading .secondary-button {
+  min-height: 34px;
+  padding: 0 11px;
+  font-size: 0.73rem;
+}
+.ingredient-row {
+  display: grid;
+  grid-template-columns: 1.35fr 0.48fr 0.55fr 1.3fr 0.65fr 34px;
+  align-items: end;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface-soft);
+}
+.ingredient-row label {
+  gap: 4px;
+  font-size: 0.66rem;
+}
+.ingredient-row input,
+.ingredient-row select {
+  height: 38px;
+  padding: 0 8px;
+  font-size: 0.75rem;
+  background: var(--surface);
+}
+.remove-ingredient {
+  width: 34px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: #d94c3a;
+  background: var(--surface);
+}
+.remove-ingredient:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 .shopping-schedule-main,
 .shopping-schedule-aside,
@@ -1722,6 +2064,17 @@ td {
   .dashboard-grid {
     grid-template-columns: 1fr;
   }
+  .meal-week-toolbar {
+    margin: 0;
+    padding: 0;
+    justify-content: flex-start;
+  }
+  .meal-details-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .meal-quick-actions {
+    grid-column: 1 / -1;
+  }
 }
 @media (max-width: 1100px) {
   .expiry-columns {
@@ -1823,6 +2176,24 @@ td {
   }
   .side-summary .progress-ring {
     margin-block: 28px;
+  }
+  .meal-details-grid {
+    grid-template-columns: 1fr;
+  }
+  .meal-quick-actions {
+    grid-column: auto;
+  }
+  .ingredient-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .ingredient-row label:nth-child(4) {
+    grid-column: 1 / -1;
+  }
+  .remove-ingredient {
+    width: 100%;
+  }
+  .meal-tile-actions {
+    opacity: 1;
   }
 }
 @media (max-width: 480px) {

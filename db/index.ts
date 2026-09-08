@@ -11,3 +11,8 @@ export function getDb() {
 
   return drizzle(env.DB, { schema });
 }
+
+export function getDbBinding() {
+  if (!env.DB) throw new Error('Cloudflare D1 binding `DB` is unavailable.');
+  return env.DB;
+}

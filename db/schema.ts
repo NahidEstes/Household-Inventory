@@ -70,6 +70,39 @@ export const shoppingItems = sqliteTable(
   ],
 );
 
+export const mealPlans = sqliteTable(
+  'meal_plans',
+  {
+    id: integer('id').primaryKey(),
+    name: text('name').notNull(),
+    plannedDate: text('planned_date').notNull(),
+    plannedTime: text('planned_time'),
+    notes: text('notes'),
+    thumbnailUrl: text('thumbnail_url'),
+    createdAt: text('created_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index('idx_meal_plans_planned_date').on(table.plannedDate)],
+);
+
+export const mealIngredients = sqliteTable(
+  'meal_ingredients',
+  {
+    id: integer('id').primaryKey(),
+    mealId: integer('meal_id').notNull(),
+    name: text('name').notNull(),
+    quantity: real('quantity').notNull().default(1),
+    unit: text('unit').notNull().default('pcs'),
+    inventoryItemId: integer('inventory_item_id'),
+    estimatedPrice: real('estimated_price'),
+    createdAt: text('created_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index('idx_meal_ingredients_meal_id').on(table.mealId)],
+);
+
 export const householdSettings = sqliteTable('household_settings', {
   id: integer('id').primaryKey(),
   householdName: text('household_name').notNull().default('My Household'),

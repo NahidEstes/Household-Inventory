@@ -7,6 +7,7 @@ import {
   CalendarDays,
   ChartNoAxesCombined,
   Check,
+  Clock3,
   ChevronLeft,
   ChevronRight,
   CircleDollarSign,
@@ -20,6 +21,7 @@ import {
   ShoppingBasket,
   Sun,
   Trash2,
+  UtensilsCrossed,
   WalletCards,
   X,
 } from 'lucide-react';
@@ -33,6 +35,7 @@ import {
 
 type Section =
   | 'Dashboard'
+  | 'Meal planner'
   | 'Purchases'
   | 'Inventory'
   | 'Shopping list'
@@ -83,19 +86,49 @@ type ShoppingItem = {
   completed: boolean;
   createdAt: string;
 };
+type MealIngredient = {
+  id: number;
+  mealId: number;
+  name: string;
+  quantity: number;
+  unit: string;
+  inventoryItemId: number | null;
+  estimatedPrice: number | null;
+  inventoryName: string | null;
+  inStock: boolean;
+};
+type MealPlan = {
+  id: number;
+  name: string;
+  plannedDate: string;
+  plannedTime: string | null;
+  notes: string | null;
+  thumbnailUrl: string | null;
+  createdAt: string;
+  ingredients: MealIngredient[];
+};
+type MealPayload = Omit<MealPlan, 'id' | 'createdAt' | 'ingredients'> & {
+  ingredients: Array<
+    Pick<
+      MealIngredient,
+      'name' | 'quantity' | 'unit' | 'inventoryItemId' | 'estimatedPrice'
+    >
+  >;
+};
 type HouseholdSettings = {
   id: number;
   householdName: string;
   monthlyBudget: number;
 };
 type DeleteTarget = {
-  kind: 'inventory' | 'expense' | 'shopping' | 'purchase';
+  kind: 'inventory' | 'expense' | 'shopping' | 'purchase' | 'meal';
   id: number;
   name: string;
 } | null;
 
 const navItems = [
   { label: 'Dashboard' as Section, icon: Home },
+  { label: 'Meal planner' as Section, icon: UtensilsCrossed },
   { label: 'Purchases' as Section, icon: PackagePlus },
   { label: 'Inventory' as Section, icon: Box },
   { label: 'Shopping list' as Section, icon: ClipboardList },
@@ -121,6 +154,11 @@ const sectionCopy: Record<
     eyebrow: 'HOUSEHOLD OVERVIEW',
     title: 'Good morning',
     subtitle: 'Everything that needs your attention, in one place.',
+  },
+  'Meal planner': {
+    eyebrow: 'MEAL PLANNER',
+    title: 'Weekly meal schedule',
+    subtitle: 'Plan meals and make the most of what you already have.',
   },
   Purchases: {
     eyebrow: 'PURCHASE INTAKE',
@@ -166,6 +204,7 @@ export default function HomeInventory() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [shopping, setShopping] = useState<ShoppingItem[]>([]);
+  const [meals, setMeals] = useState<MealPlan[]>([]);
   const [settings, setSettings] = useState<HouseholdSettings>({
     id: 1,
     householdName: 'My Household',
@@ -178,6 +217,12 @@ export default function HomeInventory() {
   const [expenseDialogOpen, setExpenseDialogOpen] = useState(false);
   const [purchaseDialogOpen, setPurchaseDialogOpen] = useState(false);
   const [shoppingDialogOpen, setShoppingDialogOpen] = useState(false);
+  const [mealDialogOpen, setMealDialogOpen] = useState(false);
+  const [editingMeal, setEditingMeal] = useState<MealPlan | null>(null);
+  const [selectedMealDate, setSelectedMealDate] = useState(todayIso());
+  const [mealWeekStart, setMealWeekStart] = useState(
+    startOfWeekIso(todayIso()),
+  );
   const [editingShopping, setEditingShopping] = useState<ShoppingItem | null>(
     null,
   );
@@ -197,6 +242,7 @@ export default function HomeInventory() {
           '/api/expenses',
           '/api/purchases',
           '/api/shopping',
+          '/api/meals',
           '/api/settings',
         ].map((url) => fetch(url)),
       );
@@ -207,12 +253,14 @@ export default function HomeInventory() {
         expenseData,
         purchaseData,
         shoppingData,
+        mealData,
         settingsData,
       ] = await Promise.all(responses.map((response) => response.json()));
       setInventory(inventoryData as InventoryItem[]);
       setExpenses(expenseData as Expense[]);
       setPurchases(purchaseData as Purchase[]);
       setShopping(shoppingData as ShoppingItem[]);
+      setMeals(mealData as MealPlan[]);
       setSettings(settingsData as HouseholdSettings);
     } catch {
       setError('We could not load your household data. Please try again.');
@@ -330,7 +378,7 @@ export default function HomeInventory() {
       () => undefined,
     );
     return () => lifecycle.abort();
-  }, [expenses, inventory, purchases, shopping]);
+  }, [expenses, inventory, meals, purchases, shopping]);
 
   const spentTotal = useMemo(
     () => expenses.reduce((sum, item) => sum + item.amount, 0),
@@ -382,6 +430,15 @@ export default function HomeInventory() {
         item.name.toLowerCase().includes(query.toLowerCase()),
       ),
     [query, shopping],
+  );
+  const filteredMeals = useMemo(
+    () =>
+      meals.filter((meal) =>
+        `${meal.name} ${meal.notes ?? ''} ${meal.ingredients.map((item) => item.name).join(' ')}`
+          .toLowerCase()
+          .includes(query.toLowerCase()),
+      ),
+    [meals, query],
   );
   const expiryItems = useMemo(
     () =>
@@ -530,6 +587,54 @@ export default function HomeInventory() {
     setShoppingDialogOpen(true);
   }
 
+  function openNewMeal(date = selectedMealDate) {
+    setSelectedMealDate(date);
+    setEditingMeal(null);
+    setMealDialogOpen(true);
+  }
+
+  function openEditMeal(meal: MealPlan) {
+    setSelectedMealDate(meal.plannedDate);
+    setEditingMeal(meal);
+    setMealDialogOpen(true);
+  }
+
+  async function saveMeal(payload: MealPayload) {
+    const response = await fetch('/api/meals', {
+      method: editingMeal ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(
+        editingMeal ? { ...payload, id: editingMeal.id } : payload,
+      ),
+    });
+    if (!response.ok) return showNotice('Could not save the meal.');
+    await loadData();
+    setMealDialogOpen(false);
+    setEditingMeal(null);
+    showNotice(editingMeal ? 'Meal updated.' : 'Meal added to your week.');
+  }
+
+  async function generateMealShoppingList() {
+    const response = await fetch('/api/meals/shopping-list', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        weekStart: mealWeekStart,
+        weekEnd: addDaysIso(mealWeekStart, 6),
+      }),
+    });
+    if (!response.ok)
+      return showNotice('Could not generate the shopping list.');
+    const result = (await response.json()) as { createdCount: number };
+    await loadData();
+    setActiveSection('Shopping list');
+    showNotice(
+      result.createdCount
+        ? `${result.createdCount} missing ingredients added to Shopping list.`
+        : 'Your shopping list is already up to date.',
+    );
+  }
+
   async function saveShoppingItem(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     const payload = Object.fromEntries(
@@ -585,7 +690,9 @@ export default function HomeInventory() {
           ? 'purchases'
           : deleteTarget.kind === 'expense'
             ? 'expenses'
-            : 'shopping';
+            : deleteTarget.kind === 'meal'
+              ? 'meals'
+              : 'shopping';
     const response = await fetch(`/api/${endpoint}?id=${deleteTarget.id}`, {
       method: 'DELETE',
     });
@@ -600,6 +707,8 @@ export default function HomeInventory() {
       setExpenses((rows) => rows.filter((row) => row.id !== deleteTarget.id));
     if (deleteTarget.kind === 'shopping')
       setShopping((rows) => rows.filter((row) => row.id !== deleteTarget.id));
+    if (deleteTarget.kind === 'meal')
+      setMeals((rows) => rows.filter((row) => row.id !== deleteTarget.id));
     if (deleteTarget.kind === 'purchase') {
       setPurchases((rows) => rows.filter((row) => row.id !== deleteTarget.id));
       setInventory((rows) =>
@@ -723,6 +832,8 @@ export default function HomeInventory() {
               onAddItem={openNewItem}
               onAddPurchase={() => setPurchaseDialogOpen(true)}
               onScheduleShopping={() => openNewShoppingItem()}
+              onAddMeal={() => openNewMeal()}
+              onGenerateShopping={generateMealShoppingList}
             />
           </div>
           {notice && (
@@ -759,18 +870,22 @@ export default function HomeInventory() {
               purchases={filteredPurchases}
               expiryItems={expiryItems}
               inventory={filteredInventory}
+              meals={filteredMeals}
               inventoryByCategory={inventoryByCategory}
               monthlyBudget={settings.monthlyBudget}
               onAddExpense={() => setExpenseDialogOpen(true)}
               onAddItem={openNewItem}
               onAddPurchase={() => setPurchaseDialogOpen(true)}
               onEditShopping={openEditShoppingItem}
+              onEditMeal={openEditMeal}
               onDelete={setDeleteTarget}
               onEditItem={openEditItem}
               onFilterCategory={setCategoryFilter}
               onGo={switchSection}
               onSaveSettings={saveSettings}
               onScheduleShopping={openNewShoppingItem}
+              onAddMeal={openNewMeal}
+              onGenerateShopping={generateMealShoppingList}
               onToggleShopping={toggleShopping}
               remainingBudget={remainingBudget}
               settings={settings}
@@ -779,6 +894,8 @@ export default function HomeInventory() {
               onSelectShoppingDate={setSelectedShoppingDate}
               spendingByCategory={spendingByCategory}
               spentTotal={spentTotal}
+              mealWeekStart={mealWeekStart}
+              onMealWeekChange={setMealWeekStart}
             />
           )}
         </div>
@@ -830,6 +947,18 @@ export default function HomeInventory() {
           onSubmit={saveShoppingItem}
         />
       )}
+      {mealDialogOpen && (
+        <MealDialog
+          defaultDate={selectedMealDate}
+          editingMeal={editingMeal}
+          inventory={inventory}
+          onClose={() => {
+            setMealDialogOpen(false);
+            setEditingMeal(null);
+          }}
+          onSubmit={saveMeal}
+        />
+      )}
       {deleteTarget && (
         <ConfirmDialog
           name={deleteTarget.name}
@@ -843,17 +972,36 @@ export default function HomeInventory() {
 
 function HeaderActions({
   section,
+  onAddMeal,
   onAddExpense,
   onAddItem,
   onAddPurchase,
   onScheduleShopping,
+  onGenerateShopping,
 }: {
   section: Section;
+  onAddMeal: () => void;
   onAddExpense: () => void;
   onAddItem: () => void;
   onAddPurchase: () => void;
   onScheduleShopping: () => void;
+  onGenerateShopping: () => void;
 }) {
+  if (section === 'Meal planner')
+    return (
+      <div className="heading-actions">
+        <button className="secondary-button" onClick={onAddMeal} type="button">
+          <UtensilsCrossed size={18} /> Add meal
+        </button>
+        <button
+          className="primary-button"
+          onClick={onGenerateShopping}
+          type="button"
+        >
+          <ShoppingBasket size={18} /> Generate shopping list
+        </button>
+      </div>
+    );
   if (section === 'Shopping list')
     return (
       <button
@@ -907,18 +1055,22 @@ type SectionProps = {
   purchases: Purchase[];
   expiryItems: InventoryItem[];
   inventory: InventoryItem[];
+  meals: MealPlan[];
   inventoryByCategory: [string, number][];
   monthlyBudget: number;
   onAddExpense: () => void;
   onAddItem: () => void;
   onAddPurchase: () => void;
+  onAddMeal: (date?: string) => void;
   onDelete: (target: DeleteTarget) => void;
   onEditShopping: (item: ShoppingItem) => void;
+  onEditMeal: (meal: MealPlan) => void;
   onEditItem: (item: InventoryItem) => void;
   onFilterCategory: (value: string) => void;
   onGo: (section: Section) => void;
   onSaveSettings: (event: SyntheticEvent<HTMLFormElement>) => void;
   onScheduleShopping: (date?: string) => void;
+  onGenerateShopping: () => void;
   onSelectShoppingDate: (date: string) => void;
   onToggleShopping: (item: ShoppingItem) => void;
   remainingBudget: number;
@@ -927,9 +1079,13 @@ type SectionProps = {
   selectedShoppingDate: string;
   spendingByCategory: [string, number][];
   spentTotal: number;
+  mealWeekStart: string;
+  onMealWeekChange: (date: string) => void;
 };
 
 function SectionContent(props: SectionProps) {
+  if (props.activeSection === 'Meal planner')
+    return <MealPlannerView {...props} />;
   if (props.activeSection === 'Purchases') return <PurchasesView {...props} />;
   if (props.activeSection === 'Inventory') return <InventoryView {...props} />;
   if (props.activeSection === 'Shopping list')
@@ -1156,6 +1312,301 @@ function InventoryView(props: SectionProps) {
         title="No items yet"
       />
     </section>
+  );
+}
+
+function MealPlannerView(props: SectionProps) {
+  const weekDates = Array.from({ length: 7 }, (_, index) =>
+    addDaysIso(props.mealWeekStart, index),
+  );
+  const weekEnd = weekDates[6];
+  const weekMeals = props.meals
+    .filter(
+      (meal) =>
+        meal.plannedDate >= props.mealWeekStart && meal.plannedDate <= weekEnd,
+    )
+    .sort(compareMeals);
+  const ingredients = weekMeals.flatMap((meal) => meal.ingredients);
+  const missing = ingredients.filter((ingredient) => !ingredient.inStock);
+  const stockCount = ingredients.length - missing.length;
+  const stockPercent = ingredients.length
+    ? Math.round((stockCount / ingredients.length) * 100)
+    : 0;
+  const todayMeals = props.meals.filter(
+    (meal) => meal.plannedDate === todayIso(),
+  );
+  const upcoming = props.meals
+    .filter((meal) => meal.plannedDate > todayIso())
+    .sort(compareMeals)
+    .slice(0, 4);
+  const summary = [
+    {
+      label: 'Planned meals',
+      value: String(weekMeals.length),
+      note: 'Across this week',
+      icon: UtensilsCrossed,
+      tone: 'green',
+    },
+    {
+      label: 'Ingredients needed',
+      value: String(missing.length),
+      note: 'Items to buy',
+      icon: Box,
+      tone: 'coral',
+    },
+    {
+      label: 'Estimated cost',
+      value: sar(
+        missing.reduce((sum, item) => sum + (item.estimatedPrice ?? 0), 0),
+      ),
+      note: 'Missing ingredients only',
+      icon: WalletCards,
+      tone: 'blue',
+    },
+    {
+      label: 'Using from inventory',
+      value: stockPercent + '%',
+      note: `${stockCount} of ${ingredients.length} ingredients`,
+      icon: Check,
+      tone: 'mint',
+    },
+  ];
+
+  return (
+    <div className="meal-planner-view">
+      <div className="meal-week-toolbar">
+        <div className="week-navigator" aria-label="Meal plan week">
+          <CalendarDays size={18} />
+          <strong>{weekRangeLabel(props.mealWeekStart)}</strong>
+          <button
+            aria-label="Previous week"
+            onClick={() =>
+              props.onMealWeekChange(addDaysIso(props.mealWeekStart, -7))
+            }
+            type="button"
+          >
+            <ChevronLeft size={17} />
+          </button>
+          <button
+            aria-label="Next week"
+            onClick={() =>
+              props.onMealWeekChange(addDaysIso(props.mealWeekStart, 7))
+            }
+            type="button"
+          >
+            <ChevronRight size={17} />
+          </button>
+        </div>
+      </div>
+      <section
+        aria-label="Meal plan summary"
+        className="summary-grid meal-summary-grid"
+      >
+        {summary.map(({ label, value, note, icon: Icon, tone }) => (
+          <article className="summary-card" key={label}>
+            <div className={`summary-icon ${tone}`}>
+              <Icon size={20} />
+            </div>
+            <div>
+              <p>{label}</p>
+              <strong>{value}</strong>
+              <small>{note}</small>
+            </div>
+          </article>
+        ))}
+      </section>
+      <section className="meal-week-grid" aria-label="Weekly meals">
+        {weekDates.map((date) => {
+          const dayMeals = weekMeals.filter(
+            (meal) => meal.plannedDate === date,
+          );
+          return (
+            <article
+              className={`meal-day-card ${date === todayIso() ? 'today' : ''}`}
+              key={date}
+            >
+              <header>
+                <div>
+                  <strong>{weekdayShort(date)}</strong>
+                  <span>{dayMonthShort(date)}</span>
+                </div>
+                <button
+                  aria-label={`Add meal on ${dateLabel(date)}`}
+                  onClick={() => props.onAddMeal(date)}
+                  type="button"
+                >
+                  +
+                </button>
+              </header>
+              <div className="meal-day-list">
+                {dayMeals.map((meal) => (
+                  <MealTile
+                    key={meal.id}
+                    meal={meal}
+                    onDelete={props.onDelete}
+                    onEdit={props.onEditMeal}
+                  />
+                ))}
+                {!dayMeals.length && (
+                  <button
+                    className="empty-meal-day"
+                    onClick={() => props.onAddMeal(date)}
+                    type="button"
+                  >
+                    <UtensilsCrossed size={20} />
+                    <span>Add a meal</span>
+                  </button>
+                )}
+              </div>
+            </article>
+          );
+        })}
+      </section>
+      <div className="meal-details-grid">
+        <section className="panel meal-today-card">
+          <PanelHeading
+            title="Today's meals"
+            subtitle={dateLabel(todayIso())}
+          />
+          <div className="compact-meal-list">
+            {todayMeals.length ? (
+              todayMeals.map((meal) => <MealRow key={meal.id} meal={meal} />)
+            ) : (
+              <MiniEmpty text="No meals planned for today." />
+            )}
+          </div>
+        </section>
+        <section className="panel upcoming-meals-card">
+          <PanelHeading title="Upcoming meals" subtitle="Next on your plan" />
+          <div className="compact-meal-list">
+            {upcoming.length ? (
+              upcoming.map((meal) => (
+                <MealRow key={meal.id} meal={meal} showDate />
+              ))
+            ) : (
+              <MiniEmpty text="No upcoming meals yet." />
+            )}
+          </div>
+        </section>
+        <section className="panel meal-quick-actions">
+          <PanelHeading
+            title="Quick actions"
+            subtitle="Keep your plan moving"
+          />
+          <button onClick={props.onGenerateShopping} type="button">
+            <ShoppingBasket size={20} />
+            <span>
+              <strong>Generate shopping list</strong>
+              <small>From missing ingredients</small>
+            </span>
+            <ChevronRight size={17} />
+          </button>
+          <button onClick={() => props.onAddMeal()} type="button">
+            <UtensilsCrossed size={20} />
+            <span>
+              <strong>Add another meal</strong>
+              <small>Plan any day this week</small>
+            </span>
+            <ChevronRight size={17} />
+          </button>
+          <button onClick={() => props.onGo('Inventory')} type="button">
+            <Box size={20} />
+            <span>
+              <strong>Review inventory</strong>
+              <small>Check available ingredients</small>
+            </span>
+            <ChevronRight size={17} />
+          </button>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function MealTile({
+  meal,
+  onEdit,
+  onDelete,
+}: {
+  meal: MealPlan;
+  onEdit: (meal: MealPlan) => void;
+  onDelete: (target: DeleteTarget) => void;
+}) {
+  const ready =
+    meal.ingredients.length > 0 &&
+    meal.ingredients.every((item) => item.inStock);
+  return (
+    <div className="meal-tile">
+      <MealThumb meal={meal} />
+      <strong>{meal.name}</strong>
+      {meal.plannedTime && (
+        <small>
+          <Clock3 size={13} /> {timeLabel(meal.plannedTime)}
+        </small>
+      )}
+      <span className={`meal-stock ${ready ? 'ready' : 'missing'}`}>
+        <Check size={13} />
+        {ready ? 'In stock' : 'Need to buy'}
+      </span>
+      <div className="meal-tile-actions">
+        <button
+          aria-label={`Edit ${meal.name}`}
+          onClick={() => onEdit(meal)}
+          type="button"
+        >
+          <Pencil size={14} />
+        </button>
+        <button
+          aria-label={`Delete ${meal.name}`}
+          onClick={() =>
+            onDelete({ kind: 'meal', id: meal.id, name: meal.name })
+          }
+          type="button"
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MealRow({
+  meal,
+  showDate = false,
+}: {
+  meal: MealPlan;
+  showDate?: boolean;
+}) {
+  const ready =
+    meal.ingredients.length > 0 &&
+    meal.ingredients.every((item) => item.inStock);
+  return (
+    <article className="meal-row">
+      <MealThumb meal={meal} />
+      <span>
+        <strong>{meal.name}</strong>
+        <small>
+          {showDate
+            ? dayMonthShort(meal.plannedDate) + (meal.plannedTime ? ' · ' : '')
+            : ''}
+          {meal.plannedTime ? timeLabel(meal.plannedTime) : ''}
+        </small>
+      </span>
+      <em className={ready ? 'ready' : 'missing'}>
+        {ready ? 'In stock' : 'Need to buy'}
+      </em>
+    </article>
+  );
+}
+
+function MealThumb({ meal }: { meal: MealPlan }) {
+  return meal.thumbnailUrl ? (
+    // oxlint-disable-next-line next/no-img-element -- user-provided external thumbnails are not known at build time
+    <img alt="" className="meal-thumb" src={meal.thumbnailUrl} />
+  ) : (
+    <span className="meal-thumb meal-thumb-placeholder">
+      <UtensilsCrossed size={20} />
+    </span>
   );
 }
 
@@ -2182,6 +2633,288 @@ function LoadingState() {
   );
 }
 
+type IngredientDraft = {
+  key: number;
+  name: string;
+  quantity: string;
+  unit: string;
+  inventoryItemId: string;
+  estimatedPrice: string;
+};
+
+function MealDialog({
+  editingMeal,
+  defaultDate,
+  inventory,
+  onClose,
+  onSubmit,
+}: {
+  editingMeal: MealPlan | null;
+  defaultDate: string;
+  inventory: InventoryItem[];
+  onClose: () => void;
+  onSubmit: (payload: MealPayload) => void;
+}) {
+  const [ingredients, setIngredients] = useState<IngredientDraft[]>(() =>
+    editingMeal?.ingredients.length
+      ? editingMeal.ingredients.map((item) => ({
+          key: item.id,
+          name: item.name,
+          quantity: String(item.quantity),
+          unit: item.unit,
+          inventoryItemId: item.inventoryItemId
+            ? String(item.inventoryItemId)
+            : '',
+          estimatedPrice:
+            item.estimatedPrice === null ? '' : String(item.estimatedPrice),
+        }))
+      : [blankIngredient()],
+  );
+
+  function updateIngredient(key: number, patch: Partial<IngredientDraft>) {
+    setIngredients((rows) =>
+      rows.map((row) => (row.key === key ? { ...row, ...patch } : row)),
+    );
+  }
+
+  function linkInventory(row: IngredientDraft, value: string) {
+    const item = inventory.find((stock) => String(stock.id) === value);
+    updateIngredient(
+      row.key,
+      item
+        ? { inventoryItemId: value, name: item.name, unit: item.unit }
+        : { inventoryItemId: value },
+    );
+  }
+
+  function submit(event: SyntheticEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const fields = Object.fromEntries(new FormData(event.currentTarget));
+    onSubmit({
+      name: formText(fields.name),
+      plannedDate: formText(fields.plannedDate),
+      plannedTime: formText(fields.plannedTime) || null,
+      notes: formText(fields.notes) || null,
+      thumbnailUrl: formText(fields.thumbnailUrl) || null,
+      ingredients: ingredients
+        .filter((item) => item.name.trim())
+        .map((item) => ({
+          name: item.name,
+          quantity: Number(item.quantity),
+          unit: item.unit,
+          inventoryItemId: item.inventoryItemId
+            ? Number(item.inventoryItemId)
+            : null,
+          estimatedPrice: item.estimatedPrice
+            ? Number(item.estimatedPrice)
+            : null,
+        })),
+    });
+  }
+
+  return (
+    <div className="dialog-overlay">
+      <dialog
+        aria-labelledby="meal-dialog-title"
+        className="inventory-dialog meal-dialog"
+        open
+      >
+        <button
+          aria-label="Close meal dialog"
+          className="dialog-close"
+          onClick={onClose}
+          type="button"
+        >
+          <X size={17} />
+        </button>
+        <header className="dialog-header">
+          <h2 id="meal-dialog-title">
+            {editingMeal ? 'Edit meal' : 'Add meal'}
+          </h2>
+          <p>Plan a meal and link its ingredients to your inventory.</p>
+        </header>
+        <form className="dialog-form" onSubmit={submit}>
+          <label htmlFor="meal-name">
+            Meal name
+            <input
+              defaultValue={editingMeal?.name}
+              id="meal-name"
+              name="name"
+              placeholder="e.g. Chicken curry"
+              required
+            />
+          </label>
+          <div className="form-grid">
+            <label htmlFor="meal-date">
+              Date
+              <input
+                defaultValue={editingMeal?.plannedDate ?? defaultDate}
+                id="meal-date"
+                name="plannedDate"
+                required
+                type="date"
+              />
+            </label>
+            <label htmlFor="meal-time">
+              Time <span>(optional)</span>
+              <input
+                defaultValue={editingMeal?.plannedTime ?? ''}
+                id="meal-time"
+                name="plannedTime"
+                type="time"
+              />
+            </label>
+          </div>
+          <label htmlFor="meal-thumbnail">
+            Thumbnail URL <span>(optional)</span>
+            <input
+              defaultValue={editingMeal?.thumbnailUrl ?? ''}
+              id="meal-thumbnail"
+              name="thumbnailUrl"
+              placeholder="https://..."
+              type="url"
+            />
+          </label>
+          <label htmlFor="meal-notes">
+            Notes <span>(optional)</span>
+            <textarea
+              defaultValue={editingMeal?.notes ?? ''}
+              id="meal-notes"
+              name="notes"
+              placeholder="Prep notes or serving ideas"
+              rows={2}
+            />
+          </label>
+          <div className="ingredient-builder">
+            <div className="ingredient-builder-heading">
+              <span>
+                <strong>Ingredients</strong>
+                <small>Link stock or mark what needs buying.</small>
+              </span>
+              <button
+                className="secondary-button"
+                onClick={() =>
+                  setIngredients((rows) => [...rows, blankIngredient()])
+                }
+                type="button"
+              >
+                + Add ingredient
+              </button>
+            </div>
+            {ingredients.map((row, index) => (
+              <div className="ingredient-row" key={row.key}>
+                <label>
+                  Ingredient
+                  <input
+                    aria-label={`Ingredient ${index + 1} name`}
+                    onChange={(event) =>
+                      updateIngredient(row.key, { name: event.target.value })
+                    }
+                    placeholder="Ingredient name"
+                    value={row.name}
+                  />
+                </label>
+                <label>
+                  Qty
+                  <input
+                    aria-label={`Ingredient ${index + 1} quantity`}
+                    min="0.01"
+                    onChange={(event) =>
+                      updateIngredient(row.key, {
+                        quantity: event.target.value,
+                      })
+                    }
+                    required={Boolean(row.name)}
+                    step="0.01"
+                    type="number"
+                    value={row.quantity}
+                  />
+                </label>
+                <label>
+                  Unit
+                  <select
+                    aria-label={`Ingredient ${index + 1} unit`}
+                    onChange={(event) =>
+                      updateIngredient(row.key, { unit: event.target.value })
+                    }
+                    value={row.unit}
+                  >
+                    {['pcs', 'pack', 'kg', 'g', 'L', 'ml'].map((unit) => (
+                      <option key={unit}>{unit}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Inventory link
+                  <select
+                    aria-label={`Ingredient ${index + 1} inventory link`}
+                    onChange={(event) => linkInventory(row, event.target.value)}
+                    value={row.inventoryItemId}
+                  >
+                    <option value="">Not linked</option>
+                    {inventory.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name} · {item.quantity} {item.unit}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Missing cost
+                  <input
+                    aria-label={`Ingredient ${index + 1} estimated cost`}
+                    min="0"
+                    onChange={(event) =>
+                      updateIngredient(row.key, {
+                        estimatedPrice: event.target.value,
+                      })
+                    }
+                    placeholder="SAR"
+                    step="0.01"
+                    type="number"
+                    value={row.estimatedPrice}
+                  />
+                </label>
+                <button
+                  aria-label={`Remove ingredient ${index + 1}`}
+                  className="remove-ingredient"
+                  disabled={ingredients.length === 1}
+                  onClick={() =>
+                    setIngredients((rows) =>
+                      rows.filter((item) => item.key !== row.key),
+                    )
+                  }
+                  type="button"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <button className="primary-button dialog-submit" type="submit">
+            {editingMeal ? 'Save changes' : 'Add meal'}
+          </button>
+        </form>
+      </dialog>
+    </div>
+  );
+}
+
+function blankIngredient(): IngredientDraft {
+  return {
+    key: Date.now() + Math.floor(Math.random() * 100000),
+    name: '',
+    quantity: '1',
+    unit: 'pcs',
+    inventoryItemId: '',
+    estimatedPrice: '',
+  };
+}
+
+function formText(value: FormDataEntryValue | undefined) {
+  return typeof value === 'string' ? value : '';
+}
+
 function ShoppingScheduleDialog({
   editingItem,
   defaultDate,
@@ -2674,6 +3407,43 @@ function addDaysIso(value: string, days: number) {
   const date = new Date(value + 'T12:00:00');
   date.setDate(date.getDate() + days);
   return localIso(date);
+}
+
+function startOfWeekIso(value: string) {
+  const date = new Date(value + 'T12:00:00');
+  const offset = date.getDay() === 0 ? -6 : 1 - date.getDay();
+  return addDaysIso(value, offset);
+}
+
+function compareMeals(a: MealPlan, b: MealPlan) {
+  return (
+    a.plannedDate.localeCompare(b.plannedDate) ||
+    (a.plannedTime ?? '99:99').localeCompare(b.plannedTime ?? '99:99') ||
+    a.name.localeCompare(b.name)
+  );
+}
+
+function weekRangeLabel(start: string) {
+  const end = addDaysIso(start, 6);
+  const startDate = new Date(start + 'T12:00:00');
+  const endDate = new Date(end + 'T12:00:00');
+  const startLabel = new Intl.DateTimeFormat('en-US', {
+    day: 'numeric',
+    month: startDate.getMonth() === endDate.getMonth() ? undefined : 'short',
+  }).format(startDate);
+  return `${startLabel} – ${new Intl.DateTimeFormat('en-US', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  }).format(endDate)}`;
+}
+
+function timeLabel(value: string) {
+  const [hours, minutes] = value.split(':').map(Number);
+  return new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(2026, 0, 1, hours, minutes));
 }
 
 function compareShopping(a: ShoppingItem, b: ShoppingItem) {
