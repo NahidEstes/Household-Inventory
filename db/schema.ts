@@ -1,4 +1,10 @@
-import { integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import {
+  index,
+  integer,
+  real,
+  sqliteTable,
+  text,
+} from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 
 export const inventoryItems = sqliteTable('inventory_items', {
@@ -43,14 +49,26 @@ export const purchases = sqliteTable('purchases', {
     .default(sql`CURRENT_TIMESTAMP`),
 });
 
-export const shoppingItems = sqliteTable('shopping_items', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  name: text('name').notNull(),
-  completed: integer('completed', { mode: 'boolean' }).notNull().default(false),
-  createdAt: text('created_at')
-    .notNull()
-    .default(sql`CURRENT_TIMESTAMP`),
-});
+export const shoppingItems = sqliteTable(
+  'shopping_items',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    name: text('name').notNull(),
+    quantity: real('quantity').notNull().default(1),
+    unit: text('unit').notNull().default('pcs'),
+    estimatedPrice: real('estimated_price'),
+    scheduledDate: text('scheduled_date'),
+    completed: integer('completed', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    createdAt: text('created_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index('idx_shopping_items_scheduled_date').on(table.scheduledDate),
+  ],
+);
 
 export const householdSettings = sqliteTable('household_settings', {
   id: integer('id').primaryKey(),

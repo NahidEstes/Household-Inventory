@@ -4,8 +4,10 @@ import {
   Bell,
   Box,
   CalendarClock,
+  CalendarDays,
   ChartNoAxesCombined,
   Check,
+  ChevronLeft,
   ChevronRight,
   CircleDollarSign,
   ClipboardList,
@@ -74,6 +76,10 @@ type Purchase = {
 type ShoppingItem = {
   id: number;
   name: string;
+  quantity: number;
+  unit: string;
+  estimatedPrice: number | null;
+  scheduledDate: string | null;
   completed: boolean;
   createdAt: string;
 };
@@ -171,6 +177,11 @@ export default function HomeInventory() {
   const [itemDialogOpen, setItemDialogOpen] = useState(false);
   const [expenseDialogOpen, setExpenseDialogOpen] = useState(false);
   const [purchaseDialogOpen, setPurchaseDialogOpen] = useState(false);
+  const [shoppingDialogOpen, setShoppingDialogOpen] = useState(false);
+  const [editingShopping, setEditingShopping] = useState<ShoppingItem | null>(
+    null,
+  );
+  const [selectedShoppingDate, setSelectedShoppingDate] = useState(todayIso());
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
   const [notice, setNotice] = useState('');
@@ -292,6 +303,28 @@ export default function HomeInventory() {
         },
         { signal: lifecycle.signal },
       ),
+      context.registerTool(
+        {
+          name: 'start_shopping_schedule',
+          title: 'Schedule shopping item',
+          description:
+            'Open the shopping schedule and its item form for a planned purchase.',
+          inputSchema: {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
+          },
+          annotations: { readOnlyHint: false, untrustedContentHint: false },
+          execute: () => {
+            setActiveSection('Shopping list');
+            setSelectedShoppingDate(todayIso());
+            setEditingShopping(null);
+            setShoppingDialogOpen(true);
+            return { status: 'ready', form: 'shopping-schedule' };
+          },
+        },
+        { signal: lifecycle.signal },
+      ),
     ];
     void Promise.all(tools.map((tool) => Promise.resolve(tool))).catch(
       () => undefined,
@@ -342,6 +375,13 @@ export default function HomeInventory() {
           .includes(query.toLowerCase()),
       ),
     [purchases, query],
+  );
+  const filteredShopping = useMemo(
+    () =>
+      shopping.filter((item) =>
+        item.name.toLowerCase().includes(query.toLowerCase()),
+      ),
+    [query, shopping],
   );
   const expiryItems = useMemo(
     () =>
@@ -479,21 +519,43 @@ export default function HomeInventory() {
     );
   }
 
-  async function addShoppingItem(event: SyntheticEvent<HTMLFormElement>) {
+  function openNewShoppingItem(date = selectedShoppingDate) {
+    setSelectedShoppingDate(date);
+    setEditingShopping(null);
+    setShoppingDialogOpen(true);
+  }
+
+  function openEditShoppingItem(item: ShoppingItem) {
+    setEditingShopping(item);
+    setShoppingDialogOpen(true);
+  }
+
+  async function saveShoppingItem(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = event.currentTarget;
-    const rawName = new FormData(form).get('name');
-    const name = typeof rawName === 'string' ? rawName.trim() : '';
-    if (!name) return;
+    const payload = Object.fromEntries(
+      new FormData(event.currentTarget).entries(),
+    );
+    if (editingShopping) payload.id = String(editingShopping.id);
     const response = await fetch('/api/shopping', {
-      method: 'POST',
+      method: editingShopping ? 'PATCH' : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(payload),
     });
-    if (!response.ok) return showNotice('Could not add the shopping item.');
+    if (!response.ok) return showNotice('Could not save the scheduled item.');
     const item = (await response.json()) as ShoppingItem;
-    setShopping((rows) => [item, ...rows]);
-    form.reset();
+    setShopping((rows) =>
+      (editingShopping
+        ? rows.map((row) => (row.id === item.id ? item : row))
+        : [...rows, item]
+      ).sort(compareShopping),
+    );
+    setShoppingDialogOpen(false);
+    setEditingShopping(null);
+    showNotice(
+      editingShopping
+        ? `${item.name} was rescheduled.`
+        : `${item.name} was added to the shopping schedule.`,
+    );
   }
 
   async function toggleShopping(item: ShoppingItem) {
@@ -660,6 +722,7 @@ export default function HomeInventory() {
               onAddExpense={() => setExpenseDialogOpen(true)}
               onAddItem={openNewItem}
               onAddPurchase={() => setPurchaseDialogOpen(true)}
+              onScheduleShopping={() => openNewShoppingItem()}
             />
           </div>
           {notice && (
@@ -701,16 +764,19 @@ export default function HomeInventory() {
               onAddExpense={() => setExpenseDialogOpen(true)}
               onAddItem={openNewItem}
               onAddPurchase={() => setPurchaseDialogOpen(true)}
-              onAddShopping={addShoppingItem}
+              onEditShopping={openEditShoppingItem}
               onDelete={setDeleteTarget}
               onEditItem={openEditItem}
               onFilterCategory={setCategoryFilter}
               onGo={switchSection}
               onSaveSettings={saveSettings}
+              onScheduleShopping={openNewShoppingItem}
               onToggleShopping={toggleShopping}
               remainingBudget={remainingBudget}
               settings={settings}
-              shopping={shopping}
+              shopping={filteredShopping}
+              selectedShoppingDate={selectedShoppingDate}
+              onSelectShoppingDate={setSelectedShoppingDate}
               spendingByCategory={spendingByCategory}
               spentTotal={spentTotal}
             />
@@ -753,6 +819,17 @@ export default function HomeInventory() {
           onSubmit={savePurchase}
         />
       )}
+      {shoppingDialogOpen && (
+        <ShoppingScheduleDialog
+          defaultDate={selectedShoppingDate}
+          editingItem={editingShopping}
+          onClose={() => {
+            setShoppingDialogOpen(false);
+            setEditingShopping(null);
+          }}
+          onSubmit={saveShoppingItem}
+        />
+      )}
       {deleteTarget && (
         <ConfirmDialog
           name={deleteTarget.name}
@@ -769,12 +846,24 @@ function HeaderActions({
   onAddExpense,
   onAddItem,
   onAddPurchase,
+  onScheduleShopping,
 }: {
   section: Section;
   onAddExpense: () => void;
   onAddItem: () => void;
   onAddPurchase: () => void;
+  onScheduleShopping: () => void;
 }) {
+  if (section === 'Shopping list')
+    return (
+      <button
+        className="primary-button"
+        onClick={onScheduleShopping}
+        type="button"
+      >
+        <CalendarDays size={18} /> Schedule item
+      </button>
+    );
   if (section === 'Purchases')
     return (
       <button className="primary-button" onClick={onAddPurchase} type="button">
@@ -823,16 +912,19 @@ type SectionProps = {
   onAddExpense: () => void;
   onAddItem: () => void;
   onAddPurchase: () => void;
-  onAddShopping: (event: SyntheticEvent<HTMLFormElement>) => void;
   onDelete: (target: DeleteTarget) => void;
+  onEditShopping: (item: ShoppingItem) => void;
   onEditItem: (item: InventoryItem) => void;
   onFilterCategory: (value: string) => void;
   onGo: (section: Section) => void;
   onSaveSettings: (event: SyntheticEvent<HTMLFormElement>) => void;
+  onScheduleShopping: (date?: string) => void;
+  onSelectShoppingDate: (date: string) => void;
   onToggleShopping: (item: ShoppingItem) => void;
   remainingBudget: number;
   settings: HouseholdSettings;
   shopping: ShoppingItem[];
+  selectedShoppingDate: string;
   spendingByCategory: [string, number][];
   spentTotal: number;
 };
@@ -1069,72 +1161,257 @@ function InventoryView(props: SectionProps) {
 
 function ShoppingView(props: SectionProps) {
   const completed = props.shopping.filter((item) => item.completed).length;
+  const today = todayIso();
+  const weekDates = Array.from({ length: 7 }, (_, index) =>
+    addDaysIso(today, index),
+  );
+  const openItems = props.shopping
+    .filter((item) => !item.completed)
+    .sort(compareShopping);
+  const groupedItems = openItems.reduce<Record<string, ShoppingItem[]>>(
+    (groups, item) => {
+      const key = item.scheduledDate || 'Unscheduled';
+      (groups[key] ??= []).push(item);
+      return groups;
+    },
+    {},
+  );
+  const weekEnd = addDaysIso(today, 6);
+  const thisWeek = openItems.filter(
+    (item) =>
+      item.scheduledDate &&
+      item.scheduledDate >= today &&
+      item.scheduledDate <= weekEnd,
+  );
+  const estimatedTotal = thisWeek.reduce(
+    (sum, item) => sum + (item.estimatedPrice ?? 0),
+    0,
+  );
+  const typicalWeek = props.monthlyBudget / 4.33;
+  const progress = Math.min((estimatedTotal / typicalWeek) * 100, 100);
+
   return (
-    <div className="two-column-view">
-      <section className="panel page-panel">
-        <PanelHeading
-          title="Items to buy"
-          subtitle={`${props.shopping.length - completed} remaining`}
-        />
-        <form className="inline-add" onSubmit={props.onAddShopping}>
-          <label className="sr-only" htmlFor="shopping-name">
-            Shopping item
-          </label>
-          <input
-            id="shopping-name"
-            name="name"
-            placeholder="Add an item to the list..."
-          />
-          <button className="primary-button" type="submit">
-            Add item
-          </button>
-        </form>
-        <ShoppingRows
-          items={props.shopping}
-          onDelete={props.onDelete}
-          onToggle={props.onToggleShopping}
-        />
+    <div className="shopping-schedule-view">
+      <section className="shopping-schedule-main">
+        <div className="week-strip panel" aria-label="Upcoming seven days">
+          {weekDates.map((date) => (
+            <button
+              className={props.selectedShoppingDate === date ? 'active' : ''}
+              key={date}
+              onClick={() => props.onSelectShoppingDate(date)}
+              type="button"
+            >
+              <span>{weekdayShort(date)}</span>
+              <strong>{dayMonthShort(date)}</strong>
+              {openItems.some((item) => item.scheduledDate === date) && <i />}
+            </button>
+          ))}
+        </div>
+        <div className="schedule-groups">
+          {Object.entries(groupedItems).map(([date, items], index) => (
+            <section
+              className={
+                'panel schedule-group tone-' +
+                (index % 3) +
+                (props.selectedShoppingDate === date ? ' selected' : '')
+              }
+              key={date}
+            >
+              <header>
+                <span>
+                  <CalendarDays size={20} />
+                  <strong>{shoppingGroupLabel(date)}</strong>
+                </span>
+                <small>
+                  {items.length} {items.length === 1 ? 'item' : 'items'}
+                </small>
+              </header>
+              <div>
+                {items.map((item) => (
+                  <article className="scheduled-item" key={item.id}>
+                    <label
+                      aria-label={'Mark ' + item.name + ' as purchased'}
+                      htmlFor={'scheduled-' + item.id}
+                    >
+                      <input
+                        checked={item.completed}
+                        id={'scheduled-' + item.id}
+                        onChange={() => props.onToggleShopping(item)}
+                        type="checkbox"
+                      />
+                      <span>
+                        <strong>{item.name}</strong>
+                        <small>
+                          {item.quantity} {item.unit}
+                        </small>
+                      </span>
+                    </label>
+                    <strong className="scheduled-price">
+                      {item.estimatedPrice === null
+                        ? 'Price not set'
+                        : sar(item.estimatedPrice)}
+                    </strong>
+                    <div className="scheduled-actions">
+                      <button
+                        onClick={() => props.onEditShopping(item)}
+                        type="button"
+                      >
+                        <CalendarClock size={15} /> Reschedule
+                      </button>
+                      <button
+                        aria-label={'Delete ' + item.name}
+                        onClick={() =>
+                          props.onDelete({
+                            kind: 'shopping',
+                            id: item.id,
+                            name: item.name,
+                          })
+                        }
+                        type="button"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
         <EmptyState
+          action="Schedule first item"
           icon={<ShoppingBasket size={24} />}
+          onAction={() => props.onScheduleShopping(props.selectedShoppingDate)}
           show={props.shopping.length === 0}
-          text="Add the things your household needs next."
-          title="Your list is clear"
+          text="Choose a day and plan what your household needs."
+          title="Nothing scheduled yet"
         />
       </section>
-      <aside className="panel side-summary">
-        <h2>List progress</h2>
-        <div
-          className="progress-ring"
-          style={
-            {
-              '--progress': `${props.shopping.length ? (completed / props.shopping.length) * 100 : 0}%`,
-            } as React.CSSProperties
-          }
-        >
-          <strong>
-            {props.shopping.length
-              ? Math.round((completed / props.shopping.length) * 100)
-              : 0}
-            %
-          </strong>
-          <span>complete</span>
-        </div>
-        <dl>
-          <div>
-            <dt>To buy</dt>
-            <dd>{props.shopping.length - completed}</dd>
+      <aside className="shopping-schedule-aside">
+        <section className="panel week-summary-card">
+          <PanelHeading
+            title="This week"
+            subtitle={thisWeek.length + ' items planned'}
+            icon={<ChartNoAxesCombined size={20} />}
+          />
+          <span>Estimated total</span>
+          <strong>{sar(estimatedTotal)}</strong>
+          <div className="progress-track">
+            <i style={{ width: progress + '%' }} />
           </div>
-          <div>
-            <dt>Completed</dt>
-            <dd>{completed}</dd>
-          </div>
-          <div>
-            <dt>Total</dt>
-            <dd>{props.shopping.length}</dd>
-          </div>
-        </dl>
+          <small>
+            {progress.toFixed(0)}% of your typical weekly budget ·{' '}
+            {sar(typicalWeek)}
+          </small>
+          <dl>
+            <div>
+              <dt>To buy</dt>
+              <dd>{openItems.length}</dd>
+            </div>
+            <div>
+              <dt>Completed</dt>
+              <dd>{completed}</dd>
+            </div>
+          </dl>
+        </section>
+        <ShoppingCalendar
+          items={openItems}
+          onSelect={props.onSelectShoppingDate}
+          selectedDate={props.selectedShoppingDate}
+        />
       </aside>
     </div>
+  );
+}
+
+function ShoppingCalendar({
+  items,
+  selectedDate,
+  onSelect,
+}: {
+  items: ShoppingItem[];
+  selectedDate: string;
+  onSelect: (date: string) => void;
+}) {
+  const active = new Date(selectedDate + 'T12:00:00');
+  const year = active.getFullYear();
+  const month = active.getMonth();
+  const firstWeekday = new Date(year, month, 1, 12).getDay();
+  const totalDays = new Date(year, month + 1, 0, 12).getDate();
+  const cells = [
+    ...Array.from({ length: firstWeekday }, () => null),
+    ...Array.from({ length: totalDays }, (_, index) => index + 1),
+  ];
+
+  function moveMonth(change: number) {
+    onSelect(localIso(new Date(year, month + change, 1, 12)));
+  }
+
+  return (
+    <section className="panel shopping-calendar">
+      <header>
+        <span>
+          <CalendarDays size={19} />
+          <strong>
+            {new Intl.DateTimeFormat('en-US', {
+              month: 'long',
+              year: 'numeric',
+            }).format(active)}
+          </strong>
+        </span>
+        <span>
+          <button
+            aria-label="Previous month"
+            onClick={() => moveMonth(-1)}
+            type="button"
+          >
+            <ChevronLeft size={17} />
+          </button>
+          <button
+            aria-label="Next month"
+            onClick={() => moveMonth(1)}
+            type="button"
+          >
+            <ChevronRight size={17} />
+          </button>
+        </span>
+      </header>
+      <div className="calendar-weekdays">
+        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+          <span key={day}>{day}</span>
+        ))}
+      </div>
+      <div className="calendar-days">
+        {cells.map((day, index) => {
+          if (!day) return <span key={'empty-' + index} />;
+          const date = localIso(new Date(year, month, day, 12));
+          return (
+            <button
+              aria-label={dateLabel(date)}
+              className={[
+                selectedDate === date ? 'selected' : '',
+                items.some((item) => item.scheduledDate === date)
+                  ? 'scheduled'
+                  : '',
+              ].join(' ')}
+              key={date}
+              onClick={() => onSelect(date)}
+              type="button"
+            >
+              {day}
+            </button>
+          );
+        })}
+      </div>
+      <footer>
+        <span>
+          <i /> Selected date
+        </span>
+        <span>
+          <i /> Scheduled shopping
+        </span>
+      </footer>
+    </section>
   );
 }
 
@@ -1758,14 +2035,25 @@ function ShoppingRows({
     <div className={`shopping-rows ${compact ? 'compact' : ''}`}>
       {items.map((item) => (
         <div className={item.completed ? 'done' : ''} key={item.id}>
-          <label htmlFor={`shopping-${item.id}`}>
+          <label
+            aria-label={`Mark ${item.name} as purchased`}
+            htmlFor={`shopping-${item.id}`}
+          >
             <input
               checked={item.completed}
               id={`shopping-${item.id}`}
               onChange={() => onToggle(item)}
               type="checkbox"
             />
-            <span>{item.name}</span>
+            <span className="shopping-row-copy">
+              <strong>{item.name}</strong>
+              <small>
+                {item.quantity} {item.unit}
+                {item.scheduledDate
+                  ? ' · ' + dayMonthShort(item.scheduledDate)
+                  : ' · Unscheduled'}
+              </small>
+            </span>
           </label>
           <button
             aria-label={`Delete ${item.name}`}
@@ -1890,6 +2178,119 @@ function LoadingState() {
       <span />
       <span />
       <span />
+    </div>
+  );
+}
+
+function ShoppingScheduleDialog({
+  editingItem,
+  defaultDate,
+  onClose,
+  onSubmit,
+}: {
+  editingItem: ShoppingItem | null;
+  defaultDate: string;
+  onClose: () => void;
+  onSubmit: (event: SyntheticEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <div className="dialog-overlay">
+      <dialog
+        aria-labelledby="shopping-dialog-title"
+        className="inventory-dialog"
+        open
+      >
+        <button
+          aria-label="Close schedule dialog"
+          className="dialog-close"
+          onClick={onClose}
+          type="button"
+        >
+          <X size={17} />
+        </button>
+        <header className="dialog-header">
+          <h2 id="shopping-dialog-title">
+            {editingItem ? 'Reschedule item' : 'Schedule item'}
+          </h2>
+          <p>Plan the date, quantity and estimated SAR price.</p>
+        </header>
+        <form className="dialog-form" onSubmit={onSubmit}>
+          <label htmlFor="scheduled-item-name">
+            Item name
+            <input
+              defaultValue={editingItem?.name}
+              id="scheduled-item-name"
+              name="name"
+              placeholder="e.g. Basmati rice"
+              required
+            />
+          </label>
+          <div className="form-grid">
+            <label htmlFor="scheduled-quantity">
+              Quantity
+              <input
+                defaultValue={editingItem?.quantity ?? 1}
+                id="scheduled-quantity"
+                min="0.01"
+                name="quantity"
+                required
+                step="0.01"
+                type="number"
+              />
+            </label>
+            <label htmlFor="scheduled-unit">
+              Unit
+              <select
+                defaultValue={editingItem?.unit ?? 'pcs'}
+                id="scheduled-unit"
+                name="unit"
+                required
+              >
+                <option value="pcs">pcs</option>
+                <option value="pack">pack</option>
+                <option value="kg">kg</option>
+                <option value="g">g</option>
+                <option value="L">L</option>
+                <option value="ml">ml</option>
+              </select>
+            </label>
+          </div>
+          <div className="form-grid">
+            <label htmlFor="scheduled-date">
+              Purchase date
+              <input
+                defaultValue={editingItem?.scheduledDate ?? defaultDate}
+                id="scheduled-date"
+                name="scheduledDate"
+                required
+                type="date"
+              />
+            </label>
+            <label htmlFor="scheduled-price">
+              Estimated price (SAR) <span>(optional)</span>
+              <input
+                defaultValue={editingItem?.estimatedPrice ?? ''}
+                id="scheduled-price"
+                min="0"
+                name="estimatedPrice"
+                placeholder="0.00"
+                step="0.01"
+                type="number"
+              />
+            </label>
+          </div>
+          <div className="purchase-save-note">
+            <CalendarDays size={17} />
+            <span>
+              The item will appear under its scheduled day and in the monthly
+              calendar.
+            </span>
+          </div>
+          <button className="primary-button dialog-submit" type="submit">
+            {editingItem ? 'Save schedule' : 'Schedule item'}
+          </button>
+        </form>
+      </dialog>
     </div>
   );
 }
@@ -2256,6 +2657,56 @@ function ConfirmDialog({
       </dialog>
     </div>
   );
+}
+
+function localIso(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return year + '-' + month + '-' + day;
+}
+
+function todayIso() {
+  return localIso(new Date());
+}
+
+function addDaysIso(value: string, days: number) {
+  const date = new Date(value + 'T12:00:00');
+  date.setDate(date.getDate() + days);
+  return localIso(date);
+}
+
+function compareShopping(a: ShoppingItem, b: ShoppingItem) {
+  if (!a.scheduledDate && !b.scheduledDate)
+    return b.createdAt.localeCompare(a.createdAt);
+  if (!a.scheduledDate) return 1;
+  if (!b.scheduledDate) return -1;
+  return (
+    a.scheduledDate.localeCompare(b.scheduledDate) ||
+    b.createdAt.localeCompare(a.createdAt)
+  );
+}
+
+function weekdayShort(value: string) {
+  return new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(
+    new Date(value + 'T12:00:00'),
+  );
+}
+
+function dayMonthShort(value: string) {
+  return new Intl.DateTimeFormat('en-US', {
+    day: 'numeric',
+    month: 'short',
+  }).format(new Date(value + 'T12:00:00'));
+}
+
+function shoppingGroupLabel(value: string) {
+  if (value === 'Unscheduled') return 'Unscheduled';
+  if (value === todayIso())
+    return 'Today · ' + weekdayShort(value) + ' ' + dayMonthShort(value);
+  if (value === addDaysIso(todayIso(), 1))
+    return 'Tomorrow · ' + weekdayShort(value) + ' ' + dayMonthShort(value);
+  return weekdayShort(value) + ' · ' + dayMonthShort(value);
 }
 
 function itemStatus(item: InventoryItem) {
