@@ -15,6 +15,13 @@
       "when": 1788846330847,
       "tag": "0001_military_william_stryker",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788850154624,
+      "tag": "0002_quick_energizer",
+      "breakpoints": true
     }
   ]
 }

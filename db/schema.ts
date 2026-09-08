@@ -25,6 +25,24 @@ export const expenses = sqliteTable('expenses', {
     .default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const purchases = sqliteTable('purchases', {
+  id: integer('id').primaryKey(),
+  itemName: text('item_name').notNull(),
+  category: text('category').notNull(),
+  quantity: real('quantity').notNull(),
+  unit: text('unit').notNull(),
+  totalPrice: real('total_price').notNull(),
+  purchasedAt: text('purchased_at').notNull(),
+  expiryDate: text('expiry_date'),
+  store: text('store'),
+  location: text('location').notNull(),
+  inventoryItemId: integer('inventory_item_id').notNull(),
+  expenseId: integer('expense_id').notNull(),
+  createdAt: text('created_at')
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+});
+
 export const shoppingItems = sqliteTable('shopping_items', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),

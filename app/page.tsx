@@ -31,6 +31,7 @@ import {
 
 type Section =
   | 'Dashboard'
+  | 'Purchases'
   | 'Inventory'
   | 'Shopping list'
   | 'Expenses'
@@ -55,6 +56,21 @@ type Expense = {
   spentAt: string;
   createdAt: string;
 };
+type Purchase = {
+  id: number;
+  itemName: string;
+  category: string;
+  quantity: number;
+  unit: string;
+  totalPrice: number;
+  purchasedAt: string;
+  expiryDate: string | null;
+  store: string | null;
+  location: string;
+  inventoryItemId: number;
+  expenseId: number;
+  createdAt: string;
+};
 type ShoppingItem = {
   id: number;
   name: string;
@@ -67,13 +83,14 @@ type HouseholdSettings = {
   monthlyBudget: number;
 };
 type DeleteTarget = {
-  kind: 'inventory' | 'expense' | 'shopping';
+  kind: 'inventory' | 'expense' | 'shopping' | 'purchase';
   id: number;
   name: string;
 } | null;
 
 const navItems = [
   { label: 'Dashboard' as Section, icon: Home },
+  { label: 'Purchases' as Section, icon: PackagePlus },
   { label: 'Inventory' as Section, icon: Box },
   { label: 'Shopping list' as Section, icon: ClipboardList },
   { label: 'Expenses' as Section, icon: WalletCards },
@@ -98,6 +115,11 @@ const sectionCopy: Record<
     eyebrow: 'HOUSEHOLD OVERVIEW',
     title: 'Good morning',
     subtitle: 'Everything that needs your attention, in one place.',
+  },
+  Purchases: {
+    eyebrow: 'PURCHASE INTAKE',
+    title: 'Purchases',
+    subtitle: 'Add stock, spending and expiry details in one step.',
   },
   Inventory: {
     eyebrow: 'STOCK CONTROL',
@@ -136,6 +158,7 @@ export default function HomeInventory() {
   const [activeSection, setActiveSection] = useState<Section>('Dashboard');
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [shopping, setShopping] = useState<ShoppingItem[]>([]);
   const [settings, setSettings] = useState<HouseholdSettings>({
     id: 1,
@@ -147,6 +170,7 @@ export default function HomeInventory() {
   const [categoryFilter, setCategoryFilter] = useState('All categories');
   const [itemDialogOpen, setItemDialogOpen] = useState(false);
   const [expenseDialogOpen, setExpenseDialogOpen] = useState(false);
+  const [purchaseDialogOpen, setPurchaseDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
   const [notice, setNotice] = useState('');
@@ -160,16 +184,23 @@ export default function HomeInventory() {
         [
           '/api/inventory',
           '/api/expenses',
+          '/api/purchases',
           '/api/shopping',
           '/api/settings',
         ].map((url) => fetch(url)),
       );
       if (responses.some((response) => !response.ok))
         throw new Error('Data request failed');
-      const [inventoryData, expenseData, shoppingData, settingsData] =
-        await Promise.all(responses.map((response) => response.json()));
+      const [
+        inventoryData,
+        expenseData,
+        purchaseData,
+        shoppingData,
+        settingsData,
+      ] = await Promise.all(responses.map((response) => response.json()));
       setInventory(inventoryData as InventoryItem[]);
       setExpenses(expenseData as Expense[]);
+      setPurchases(purchaseData as Purchase[]);
       setShopping(shoppingData as ShoppingItem[]);
       setSettings(settingsData as HouseholdSettings);
     } catch {
@@ -213,6 +244,7 @@ export default function HomeInventory() {
           annotations: { readOnlyHint: true, untrustedContentHint: false },
           execute: () => ({
             inventoryItems: inventory.length,
+            purchases: purchases.length,
             shoppingItems: shopping.filter((item) => !item.completed).length,
             monthlySpend: expenses.reduce((sum, item) => sum + item.amount, 0),
             currency: 'SAR',
@@ -240,12 +272,32 @@ export default function HomeInventory() {
         },
         { signal: lifecycle.signal },
       ),
+      context.registerTool(
+        {
+          name: 'start_purchase_creation',
+          title: 'Add purchase',
+          description:
+            'Open the purchase form that updates inventory, expenses and price history together.',
+          inputSchema: {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
+          },
+          annotations: { readOnlyHint: false, untrustedContentHint: false },
+          execute: () => {
+            setActiveSection('Purchases');
+            setPurchaseDialogOpen(true);
+            return { status: 'ready', form: 'purchase' };
+          },
+        },
+        { signal: lifecycle.signal },
+      ),
     ];
     void Promise.all(tools.map((tool) => Promise.resolve(tool))).catch(
       () => undefined,
     );
     return () => lifecycle.abort();
-  }, [expenses, inventory, shopping]);
+  }, [expenses, inventory, purchases, shopping]);
 
   const spentTotal = useMemo(
     () => expenses.reduce((sum, item) => sum + item.amount, 0),
@@ -281,6 +333,15 @@ export default function HomeInventory() {
           .includes(query.toLowerCase()),
       ),
     [expenses, query],
+  );
+  const filteredPurchases = useMemo(
+    () =>
+      purchases.filter((item) =>
+        `${item.itemName} ${item.category} ${item.store ?? ''}`
+          .toLowerCase()
+          .includes(query.toLowerCase()),
+      ),
+    [purchases, query],
   );
   const expiryItems = useMemo(
     () =>
@@ -390,6 +451,34 @@ export default function HomeInventory() {
     showNotice(`${sar(expense.amount)} expense saved.`);
   }
 
+  async function savePurchase(event: SyntheticEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const payload = Object.fromEntries(
+      new FormData(event.currentTarget).entries(),
+    );
+    const response = await fetch('/api/purchases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok)
+      return showNotice(
+        'Could not save the purchase. Please check the details.',
+      );
+    const result = (await response.json()) as {
+      purchase: Purchase;
+      inventoryItem: InventoryItem;
+      expense: Expense;
+    };
+    setPurchases((rows) => [result.purchase, ...rows]);
+    setInventory((rows) => [result.inventoryItem, ...rows]);
+    setExpenses((rows) => [result.expense, ...rows]);
+    setPurchaseDialogOpen(false);
+    showNotice(
+      `${result.purchase.itemName} saved to purchases, inventory and expenses.`,
+    );
+  }
+
   async function addShoppingItem(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -430,19 +519,32 @@ export default function HomeInventory() {
     const endpoint =
       deleteTarget.kind === 'inventory'
         ? 'inventory'
-        : deleteTarget.kind === 'expense'
-          ? 'expenses'
-          : 'shopping';
+        : deleteTarget.kind === 'purchase'
+          ? 'purchases'
+          : deleteTarget.kind === 'expense'
+            ? 'expenses'
+            : 'shopping';
     const response = await fetch(`/api/${endpoint}?id=${deleteTarget.id}`, {
       method: 'DELETE',
     });
     if (!response.ok) return showNotice('Could not delete this record.');
+    const deleted = (await response.json()) as {
+      inventoryItemId?: number;
+      expenseId?: number;
+    };
     if (deleteTarget.kind === 'inventory')
       setInventory((rows) => rows.filter((row) => row.id !== deleteTarget.id));
     if (deleteTarget.kind === 'expense')
       setExpenses((rows) => rows.filter((row) => row.id !== deleteTarget.id));
     if (deleteTarget.kind === 'shopping')
       setShopping((rows) => rows.filter((row) => row.id !== deleteTarget.id));
+    if (deleteTarget.kind === 'purchase') {
+      setPurchases((rows) => rows.filter((row) => row.id !== deleteTarget.id));
+      setInventory((rows) =>
+        rows.filter((row) => row.id !== deleted.inventoryItemId),
+      );
+      setExpenses((rows) => rows.filter((row) => row.id !== deleted.expenseId));
+    }
     showNotice(`${deleteTarget.name} was deleted.`);
     setDeleteTarget(null);
   }
@@ -557,6 +659,7 @@ export default function HomeInventory() {
               section={activeSection}
               onAddExpense={() => setExpenseDialogOpen(true)}
               onAddItem={openNewItem}
+              onAddPurchase={() => setPurchaseDialogOpen(true)}
             />
           </div>
           {notice && (
@@ -590,12 +693,14 @@ export default function HomeInventory() {
               categoryFilter={categoryFilter}
               categories={categories}
               expenses={filteredExpenses}
+              purchases={filteredPurchases}
               expiryItems={expiryItems}
               inventory={filteredInventory}
               inventoryByCategory={inventoryByCategory}
               monthlyBudget={settings.monthlyBudget}
               onAddExpense={() => setExpenseDialogOpen(true)}
               onAddItem={openNewItem}
+              onAddPurchase={() => setPurchaseDialogOpen(true)}
               onAddShopping={addShoppingItem}
               onDelete={setDeleteTarget}
               onEditItem={openEditItem}
@@ -642,6 +747,12 @@ export default function HomeInventory() {
           onSubmit={saveExpense}
         />
       )}
+      {purchaseDialogOpen && (
+        <PurchaseDialog
+          onClose={() => setPurchaseDialogOpen(false)}
+          onSubmit={savePurchase}
+        />
+      )}
       {deleteTarget && (
         <ConfirmDialog
           name={deleteTarget.name}
@@ -657,11 +768,19 @@ function HeaderActions({
   section,
   onAddExpense,
   onAddItem,
+  onAddPurchase,
 }: {
   section: Section;
   onAddExpense: () => void;
   onAddItem: () => void;
+  onAddPurchase: () => void;
 }) {
+  if (section === 'Purchases')
+    return (
+      <button className="primary-button" onClick={onAddPurchase} type="button">
+        <PackagePlus size={18} /> Add purchase
+      </button>
+    );
   if (section === 'Inventory')
     return (
       <button className="primary-button" onClick={onAddItem} type="button">
@@ -677,8 +796,12 @@ function HeaderActions({
   if (section !== 'Dashboard') return null;
   return (
     <div className="heading-actions">
-      <button className="secondary-button" onClick={onAddExpense} type="button">
-        <CircleDollarSign size={18} /> Add expense
+      <button
+        className="secondary-button"
+        onClick={onAddPurchase}
+        type="button"
+      >
+        <PackagePlus size={18} /> Add purchase
       </button>
       <button className="primary-button" onClick={onAddItem} type="button">
         <PackagePlus size={18} /> Add item
@@ -692,12 +815,14 @@ type SectionProps = {
   categoryFilter: string;
   categories: string[];
   expenses: Expense[];
+  purchases: Purchase[];
   expiryItems: InventoryItem[];
   inventory: InventoryItem[];
   inventoryByCategory: [string, number][];
   monthlyBudget: number;
   onAddExpense: () => void;
   onAddItem: () => void;
+  onAddPurchase: () => void;
   onAddShopping: (event: SyntheticEvent<HTMLFormElement>) => void;
   onDelete: (target: DeleteTarget) => void;
   onEditItem: (item: InventoryItem) => void;
@@ -713,6 +838,7 @@ type SectionProps = {
 };
 
 function SectionContent(props: SectionProps) {
+  if (props.activeSection === 'Purchases') return <PurchasesView {...props} />;
   if (props.activeSection === 'Inventory') return <InventoryView {...props} />;
   if (props.activeSection === 'Shopping list')
     return <ShoppingView {...props} />;
@@ -848,6 +974,58 @@ function DashboardView(props: SectionProps) {
           </button>
         </aside>
       </div>
+    </>
+  );
+}
+
+function PurchasesView(props: SectionProps) {
+  const purchaseTotal = props.purchases.reduce(
+    (sum, item) => sum + item.totalPrice,
+    0,
+  );
+  const averagePurchase = props.purchases.length
+    ? purchaseTotal / props.purchases.length
+    : 0;
+  const pricedItems = new Set(
+    props.purchases.map((item) => item.itemName.toLowerCase()),
+  ).size;
+  return (
+    <>
+      <section className="summary-grid purchase-summary">
+        <SummaryCard
+          label="Purchase total"
+          value={sar(purchaseTotal)}
+          note={`${props.purchases.length} purchase records`}
+          icon={<CircleDollarSign size={20} />}
+        />
+        <SummaryCard
+          label="Average purchase"
+          value={sar(averagePurchase)}
+          note="Average transaction value"
+          icon={<ShoppingBasket size={20} />}
+        />
+        <SummaryCard
+          label="Tracked products"
+          value={String(pricedItems)}
+          note="With price history"
+          icon={<ChartNoAxesCombined size={20} />}
+        />
+      </section>
+      <section className="panel page-panel purchase-panel">
+        <PanelHeading
+          title="Purchase history"
+          subtitle="Every purchase also creates inventory and expense records"
+        />
+        <PurchaseTable purchases={props.purchases} onDelete={props.onDelete} />
+        <EmptyState
+          action="Add first purchase"
+          icon={<PackagePlus size={24} />}
+          onAction={props.onAddPurchase}
+          show={props.purchases.length === 0}
+          text="Record a purchase to update stock, expenses and price history together."
+          title="No purchases yet"
+        />
+      </section>
     </>
   );
 }
@@ -1060,6 +1238,16 @@ function ReportsView(props: SectionProps) {
     ...props.inventoryByCategory.map((row) => row[1]),
     1,
   );
+  const latestPrices = props.purchases
+    .filter(
+      (purchase, index, rows) =>
+        rows.findIndex(
+          (item) =>
+            item.itemName.toLowerCase() === purchase.itemName.toLowerCase() &&
+            item.unit === purchase.unit,
+        ) === index,
+    )
+    .slice(0, 6);
   return (
     <div className="reports-grid">
       <section className="panel report-card wide">
@@ -1125,6 +1313,61 @@ function ReportsView(props: SectionProps) {
           </div>
         ) : (
           <MiniEmpty text="Add inventory items to see category insights." />
+        )}
+      </section>
+      <section className="panel report-card wide">
+        <PanelHeading
+          title="Latest product prices"
+          subtitle="Current unit prices and movement from the previous purchase"
+        />
+        {latestPrices.length ? (
+          <div className="price-insights">
+            {latestPrices.map((purchase) => {
+              const currentIndex = props.purchases.findIndex(
+                (item) => item.id === purchase.id,
+              );
+              const previous = props.purchases
+                .slice(currentIndex + 1)
+                .find(
+                  (item) =>
+                    item.itemName.toLowerCase() ===
+                      purchase.itemName.toLowerCase() &&
+                    item.unit === purchase.unit,
+                );
+              const unitPrice = purchase.totalPrice / purchase.quantity;
+              const previousPrice = previous
+                ? previous.totalPrice / previous.quantity
+                : null;
+              const difference = previousPrice
+                ? ((unitPrice - previousPrice) / previousPrice) * 100
+                : null;
+              return (
+                <article key={purchase.id}>
+                  <span className="food-icon">
+                    {categoryIcons[purchase.category] ?? '📦'}
+                  </span>
+                  <div>
+                    <strong>{purchase.itemName}</strong>
+                    <small>
+                      per {purchase.unit} · {purchase.store || 'Store not set'}
+                    </small>
+                  </div>
+                  <div>
+                    <strong>{sar(unitPrice)}</strong>
+                    <small
+                      className={`price-change ${difference && difference > 0 ? 'up' : difference && difference < 0 ? 'down' : ''}`}
+                    >
+                      {difference === null
+                        ? 'First recorded price'
+                        : `${difference > 0 ? '+' : ''}${difference.toFixed(1)}% vs last`}
+                    </small>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <MiniEmpty text="Add purchases to build product price history." />
         )}
       </section>
     </div>
@@ -1322,6 +1565,109 @@ function InventoryTable({
                           kind: 'inventory',
                           id: item.id,
                           name: item.name,
+                        })
+                      }
+                      type="button"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PurchaseTable({
+  purchases,
+  onDelete,
+}: {
+  purchases: Purchase[];
+  onDelete: (target: DeleteTarget) => void;
+}) {
+  if (!purchases.length) return null;
+  return (
+    <div className="table-wrap">
+      <table aria-label="Purchase history">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Purchased</th>
+            <th>Quantity</th>
+            <th>Store</th>
+            <th>Expiry</th>
+            <th>Unit price</th>
+            <th>Total</th>
+            <th aria-label="Actions" />
+          </tr>
+        </thead>
+        <tbody>
+          {purchases.map((purchase, index) => {
+            const unitPrice = purchase.totalPrice / purchase.quantity;
+            const previous = purchases
+              .slice(index + 1)
+              .find(
+                (item) =>
+                  item.itemName.toLowerCase() ===
+                    purchase.itemName.toLowerCase() &&
+                  item.unit === purchase.unit,
+              );
+            const previousUnitPrice = previous
+              ? previous.totalPrice / previous.quantity
+              : null;
+            const priceDifference = previousUnitPrice
+              ? ((unitPrice - previousUnitPrice) / previousUnitPrice) * 100
+              : null;
+            return (
+              <tr key={purchase.id}>
+                <td aria-label={`${purchase.itemName}, ${purchase.category}`}>
+                  <span className="table-item">
+                    <span aria-hidden="true" className="food-icon">
+                      {categoryIcons[purchase.category] ?? '📦'}
+                    </span>
+                    <span>
+                      <strong>{purchase.itemName}</strong>
+                      <small>{purchase.category}</small>
+                    </span>
+                  </span>
+                </td>
+                <td>{dateLabel(purchase.purchasedAt)}</td>
+                <td>
+                  {purchase.quantity} {purchase.unit}
+                </td>
+                <td>{purchase.store || '—'}</td>
+                <td>
+                  {purchase.expiryDate
+                    ? dateLabel(purchase.expiryDate)
+                    : 'No expiry'}
+                </td>
+                <td>
+                  <strong>{sar(unitPrice)}</strong>
+                  {priceDifference !== null && (
+                    <small
+                      className={`price-change ${priceDifference > 0 ? 'up' : priceDifference < 0 ? 'down' : ''}`}
+                    >
+                      {priceDifference > 0 ? '+' : ''}
+                      {priceDifference.toFixed(1)}% vs last
+                    </small>
+                  )}
+                </td>
+                <td>
+                  <strong>{sar(purchase.totalPrice)}</strong>
+                </td>
+                <td>
+                  <div className="row-actions">
+                    <button
+                      aria-label={`Delete ${purchase.itemName} purchase`}
+                      onClick={() =>
+                        onDelete({
+                          kind: 'purchase',
+                          id: purchase.id,
+                          name: `${purchase.itemName} purchase`,
                         })
                       }
                       type="button"
@@ -1661,6 +2007,142 @@ function ItemDialog({
           </label>
           <button className="primary-button dialog-submit" type="submit">
             {editingItem ? 'Save changes' : 'Save item'}
+          </button>
+        </form>
+      </dialog>
+    </div>
+  );
+}
+
+function PurchaseDialog({
+  onClose,
+  onSubmit,
+}: {
+  onClose: () => void;
+  onSubmit: (event: SyntheticEvent<HTMLFormElement>) => void;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  return (
+    <div className="dialog-overlay">
+      <dialog
+        aria-labelledby="purchase-dialog-title"
+        className="inventory-dialog purchase-dialog"
+        open
+      >
+        <button
+          aria-label="Close purchase dialog"
+          className="dialog-close"
+          onClick={onClose}
+          type="button"
+        >
+          <X size={17} />
+        </button>
+        <header className="dialog-header">
+          <h2 id="purchase-dialog-title">Add purchase</h2>
+          <p>One entry updates inventory, expenses and price history.</p>
+        </header>
+        <form className="dialog-form" onSubmit={onSubmit}>
+          <label htmlFor="purchase-item-name">
+            Item name
+            <input
+              id="purchase-item-name"
+              name="itemName"
+              placeholder="e.g. Basmati rice"
+              required
+            />
+          </label>
+          <div className="form-grid">
+            <label htmlFor="purchase-quantity">
+              Quantity
+              <input
+                id="purchase-quantity"
+                min="0.01"
+                name="quantity"
+                required
+                step="0.01"
+                type="number"
+              />
+            </label>
+            <label htmlFor="purchase-unit">
+              Unit
+              <select id="purchase-unit" name="unit" required>
+                <option value="kg">kg</option>
+                <option value="L">L</option>
+                <option value="pcs">pcs</option>
+                <option value="pack">pack</option>
+              </select>
+            </label>
+          </div>
+          <div className="form-grid">
+            <label htmlFor="purchase-price">
+              Total price (SAR)
+              <input
+                id="purchase-price"
+                min="0.01"
+                name="totalPrice"
+                placeholder="0.00"
+                required
+                step="0.01"
+                type="number"
+              />
+            </label>
+            <label htmlFor="purchase-date">
+              Purchase date
+              <input
+                defaultValue={today}
+                id="purchase-date"
+                name="purchasedAt"
+                required
+                type="date"
+              />
+            </label>
+          </div>
+          <div className="form-grid">
+            <label htmlFor="purchase-category">
+              Category
+              <select id="purchase-category" name="category" required>
+                <option>Pantry</option>
+                <option>Dairy & eggs</option>
+                <option>Vegetables</option>
+                <option>Frozen</option>
+                <option>Household</option>
+                <option>Other</option>
+              </select>
+            </label>
+            <label htmlFor="purchase-location">
+              Store in
+              <select id="purchase-location" name="location" required>
+                <option>Kitchen</option>
+                <option>Fridge</option>
+                <option>Freezer</option>
+                <option>Storage</option>
+                <option>Bathroom</option>
+              </select>
+            </label>
+          </div>
+          <div className="form-grid">
+            <label htmlFor="purchase-expiry">
+              Expiry date <span>(optional)</span>
+              <input id="purchase-expiry" name="expiryDate" type="date" />
+            </label>
+            <label htmlFor="purchase-store">
+              Shop or store <span>(optional)</span>
+              <input
+                id="purchase-store"
+                name="store"
+                placeholder="e.g. Lulu Hypermarket"
+              />
+            </label>
+          </div>
+          <div className="purchase-save-note">
+            <Check size={17} />
+            <span>
+              This will create an inventory batch and a matching grocery
+              expense.
+            </span>
+          </div>
+          <button className="primary-button dialog-submit" type="submit">
+            Save purchase
           </button>
         </form>
       </dialog>
