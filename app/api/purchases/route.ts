@@ -1,6 +1,7 @@
 import { desc, eq } from 'drizzle-orm';
 import { getDb } from '@/db';
-import { expenses, inventoryItems, purchases } from '@/db/schema';
+import { expenses, inventoryItems, purchases, stockChanges } from '@/db/schema';
+import { canonicalProductName } from '@/lib/products';
 
 export async function GET() {
   const rows = await getDb()
@@ -12,7 +13,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const body = (await request.json()) as Record<string, unknown>;
-  const itemName = textField(body.itemName);
+  const itemName = await canonicalProductName(body.itemName);
   const category = textField(body.category);
   const unit = textField(body.unit);
   const location = textField(body.location);
@@ -85,6 +86,18 @@ export async function POST(request: Request) {
         expenseId,
       })
       .returning(),
+    db.insert(stockChanges).values({
+      id: recordId(),
+      inventoryItemId,
+      itemName,
+      unit,
+      quantityChange: quantity,
+      quantityBefore: 0,
+      quantityAfter: quantity,
+      reason: 'Purchase',
+      note: store || null,
+      createdAt: new Date().toISOString(),
+    }),
   ]);
 
   return Response.json(
@@ -116,6 +129,9 @@ export async function DELETE(request: Request) {
 
   await db.batch([
     db.delete(purchases).where(eq(purchases.id, id)),
+    db
+      .delete(stockChanges)
+      .where(eq(stockChanges.inventoryItemId, purchase.inventoryItemId)),
     db
       .delete(inventoryItems)
       .where(eq(inventoryItems.id, purchase.inventoryItemId)),

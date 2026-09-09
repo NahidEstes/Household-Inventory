@@ -21,6 +21,30 @@ export const inventoryItems = sqliteTable('inventory_items', {
     .default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const stockChanges = sqliteTable(
+  'stock_changes',
+  {
+    id: integer('id').primaryKey(),
+    inventoryItemId: integer('inventory_item_id').notNull(),
+    itemName: text('item_name').notNull(),
+    unit: text('unit').notNull(),
+    quantityChange: real('quantity_change').notNull(),
+    quantityBefore: real('quantity_before').notNull(),
+    quantityAfter: real('quantity_after').notNull(),
+    reason: text('reason').notNull(),
+    note: text('note'),
+    createdAt: text('created_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index('idx_stock_changes_inventory_created').on(
+      table.inventoryItemId,
+      table.createdAt,
+    ),
+  ],
+);
+
 export const expenses = sqliteTable('expenses', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   amount: real('amount').notNull(),

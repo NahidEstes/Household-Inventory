@@ -15,8 +15,10 @@ import {
   CircleDollarSign,
   ClipboardList,
   Home,
+  History,
   Lightbulb,
   MapPin,
+  MinusCircle,
   Moon,
   PackagePlus,
   Pencil,
@@ -39,6 +41,10 @@ import {
   useMemo,
   useState,
 } from 'react';
+import {
+  ProductNameAutocomplete,
+  type ProductSuggestion,
+} from '@/components/product-name-autocomplete';
 
 type Section =
   | 'Dashboard'
@@ -94,6 +100,18 @@ type ShoppingItem = {
   estimatedPrice: number | null;
   scheduledDate: string | null;
   completed: boolean;
+  createdAt: string;
+};
+type StockChange = {
+  id: number;
+  inventoryItemId: number;
+  itemName: string;
+  unit: string;
+  quantityChange: number;
+  quantityBefore: number;
+  quantityAfter: number;
+  reason: string;
+  note: string | null;
   createdAt: string;
 };
 type MealIngredient = {
@@ -259,6 +277,9 @@ export default function HomeInventory() {
   );
   const [selectedShoppingDate, setSelectedShoppingDate] = useState(todayIso());
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
+  const [stockRemovalItem, setStockRemovalItem] =
+    useState<InventoryItem | null>(null);
+  const [historyItem, setHistoryItem] = useState<InventoryItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -478,7 +499,7 @@ export default function HomeInventory() {
   const expiryItems = useMemo(
     () =>
       inventory
-        .filter((item) => item.expiryDate)
+        .filter((item) => item.expiryDate && item.quantity > 0)
         .sort((a, b) =>
           String(a.expiryDate).localeCompare(String(b.expiryDate)),
         ),
@@ -719,7 +740,9 @@ export default function HomeInventory() {
     setShopping((rows) =>
       (editingShopping
         ? rows.map((row) => (row.id === item.id ? item : row))
-        : [...rows, item]
+        : rows.some((row) => row.id === item.id)
+          ? rows
+          : [...rows, item]
       ).sort(compareShopping),
     );
     setShoppingDialogOpen(false);
@@ -729,6 +752,57 @@ export default function HomeInventory() {
         ? `${item.name} was rescheduled.`
         : `${item.name} was added to the shopping schedule.`,
     );
+  }
+
+  async function removeStock(event: SyntheticEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!stockRemovalItem) return;
+    const payload = Object.fromEntries(
+      new FormData(event.currentTarget).entries(),
+    );
+    const response = await fetch('/api/stock-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...payload,
+        inventoryItemId: stockRemovalItem.id,
+      }),
+    });
+    if (!response.ok)
+      return showNotice(
+        await responseError(response, 'Could not remove stock.'),
+      );
+    const result = (await response.json()) as {
+      item: InventoryItem;
+      history: StockChange;
+    };
+    setInventory((rows) =>
+      rows.map((row) => (row.id === result.item.id ? result.item : row)),
+    );
+    setStockRemovalItem(null);
+    showNotice(
+      `${Math.abs(result.history.quantityChange)} ${result.history.unit} removed from ${result.item.name}.`,
+    );
+  }
+
+  async function addOutOfStockToShopping(item: InventoryItem) {
+    const response = await fetch('/api/shopping', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: item.name, quantity: 1, unit: item.unit }),
+    });
+    if (!response.ok)
+      return showNotice(
+        await responseError(response, 'Could not add this item to shopping.'),
+      );
+    const shoppingItem = (await response.json()) as ShoppingItem;
+    setShopping((rows) =>
+      (rows.some((row) => row.id === shoppingItem.id)
+        ? rows
+        : [...rows, shoppingItem]
+      ).sort(compareShopping),
+    );
+    showNotice(`${shoppingItem.name} is on your shopping list.`);
   }
 
   async function toggleShopping(item: ShoppingItem) {
@@ -953,6 +1027,9 @@ export default function HomeInventory() {
               onEditMeal={openEditMeal}
               onDelete={setDeleteTarget}
               onEditItem={openEditItem}
+              onRemoveStock={setStockRemovalItem}
+              onViewHistory={setHistoryItem}
+              onAddToShopping={addOutOfStockToShopping}
               onFilterCategory={setCategoryFilter}
               onGo={switchSection}
               onSaveSettings={saveSettings}
@@ -1038,6 +1115,19 @@ export default function HomeInventory() {
         <TaskDialog
           onClose={() => setTaskDialogOpen(false)}
           onSubmit={saveTask}
+        />
+      )}
+      {stockRemovalItem && (
+        <RemoveStockDialog
+          item={stockRemovalItem}
+          onClose={() => setStockRemovalItem(null)}
+          onSubmit={removeStock}
+        />
+      )}
+      {historyItem && (
+        <StockHistoryDialog
+          item={historyItem}
+          onClose={() => setHistoryItem(null)}
         />
       )}
       {deleteTarget && (
@@ -1149,6 +1239,9 @@ type SectionProps = {
   onEditShopping: (item: ShoppingItem) => void;
   onEditMeal: (meal: MealPlan) => void;
   onEditItem: (item: InventoryItem) => void;
+  onRemoveStock: (item: InventoryItem) => void;
+  onViewHistory: (item: InventoryItem) => void;
+  onAddToShopping: (item: InventoryItem) => void;
   onFilterCategory: (value: string) => void;
   onGo: (section: Section) => void;
   onSaveSettings: (event: SyntheticEvent<HTMLFormElement>) => void;
@@ -1473,7 +1566,7 @@ function DashboardView(props: SectionProps) {
     },
     {
       label: 'Items in stock',
-      value: String(props.inventory.length),
+      value: String(props.inventory.filter((item) => item.quantity > 0).length),
       note: `${new Set(props.inventory.map((item) => item.category)).size} categories`,
       icon: Box,
       tone: 'blue',
@@ -1656,8 +1749,11 @@ function DashboardView(props: SectionProps) {
           <InventoryTable
             compact
             items={props.inventory.slice(0, 5)}
+            onAddToShopping={props.onAddToShopping}
             onDelete={props.onDelete}
             onEdit={props.onEditItem}
+            onRemoveStock={props.onRemoveStock}
+            onViewHistory={props.onViewHistory}
           />
         </section>
         <section className="panel dashboard-shopping-card">
@@ -1925,8 +2021,11 @@ function InventoryView(props: SectionProps) {
       </div>
       <InventoryTable
         items={props.inventory}
+        onAddToShopping={props.onAddToShopping}
         onDelete={props.onDelete}
         onEdit={props.onEditItem}
+        onRemoveStock={props.onRemoveStock}
+        onViewHistory={props.onViewHistory}
       />
       <EmptyState
         action="Add first item"
@@ -2029,11 +2128,16 @@ function StorageView(props: SectionProps) {
           onChange={(event) => setStatusFilter(event.target.value)}
           value={statusFilter}
         >
-          {['All status', 'In stock', 'Low stock', 'Expiring', 'Expired'].map(
-            (status) => (
-              <option key={status}>{status}</option>
-            ),
-          )}
+          {[
+            'All status',
+            'In stock',
+            'Low stock',
+            'Out of stock',
+            'Expiring',
+            'Expired',
+          ].map((status) => (
+            <option key={status}>{status}</option>
+          ))}
         </select>
         <button
           className="secondary-button"
@@ -2056,6 +2160,7 @@ function StorageView(props: SectionProps) {
             return (
               status === 'Expiring' ||
               status === 'Expired' ||
+              status === 'Out of stock' ||
               status === 'Low stock'
             );
           }).length;
@@ -3146,11 +3251,17 @@ function InventoryTable({
   items,
   onEdit,
   onDelete,
+  onRemoveStock,
+  onViewHistory,
+  onAddToShopping,
   compact = false,
 }: {
   items: InventoryItem[];
   onEdit: (item: InventoryItem) => void;
   onDelete: (target: DeleteTarget) => void;
+  onRemoveStock: (item: InventoryItem) => void;
+  onViewHistory: (item: InventoryItem) => void;
+  onAddToShopping: (item: InventoryItem) => void;
   compact?: boolean;
 }) {
   if (!items.length)
@@ -3222,6 +3333,33 @@ function InventoryTable({
                 </td>
                 <td>
                   <div className="row-actions">
+                    {item.quantity > 0 ? (
+                      <button
+                        aria-label={`Use stock from ${item.name}`}
+                        onClick={() => onRemoveStock(item)}
+                        title="Use stock"
+                        type="button"
+                      >
+                        <MinusCircle size={15} />
+                      </button>
+                    ) : (
+                      <button
+                        aria-label={`Add ${item.name} to shopping list`}
+                        onClick={() => onAddToShopping(item)}
+                        title="Add to shopping list"
+                        type="button"
+                      >
+                        <ShoppingBasket size={15} />
+                      </button>
+                    )}
+                    <button
+                      aria-label={`View stock history for ${item.name}`}
+                      onClick={() => onViewHistory(item)}
+                      title="Stock history"
+                      type="button"
+                    >
+                      <History size={15} />
+                    </button>
                     <button
                       aria-label={`Edit ${item.name}`}
                       onClick={() => onEdit(item)}
@@ -3795,17 +3933,27 @@ function MealDialog({
             </div>
             {ingredients.map((row, index) => (
               <div className="ingredient-row" key={row.key}>
-                <label>
-                  Ingredient
-                  <input
+                <div className="ingredient-name-field">
+                  <label htmlFor={`ingredient-name-${row.key}`}>
+                    Ingredient
+                  </label>
+                  <ProductNameAutocomplete
                     aria-label={`Ingredient ${index + 1} name`}
-                    onChange={(event) =>
-                      updateIngredient(row.key, { name: event.target.value })
+                    id={`ingredient-name-${row.key}`}
+                    onProductSelect={(product) =>
+                      updateIngredient(row.key, {
+                        name: product.name,
+                        unit: product.unit,
+                        inventoryItemId: String(product.inventoryItemId),
+                      })
+                    }
+                    onValueChange={(name) =>
+                      updateIngredient(row.key, { name })
                     }
                     placeholder="Ingredient name"
                     value={row.name}
                   />
-                </label>
+                </div>
                 <label>
                   Qty
                   <input
@@ -3918,6 +4066,7 @@ function ShoppingScheduleDialog({
   onClose: () => void;
   onSubmit: (event: SyntheticEvent<HTMLFormElement>) => void;
 }) {
+  const [unit, setUnit] = useState(editingItem?.unit ?? 'pcs');
   return (
     <div className="dialog-overlay">
       <dialog
@@ -3940,16 +4089,17 @@ function ShoppingScheduleDialog({
           <p>Plan the date, quantity and estimated SAR price.</p>
         </header>
         <form className="dialog-form" onSubmit={onSubmit}>
-          <label htmlFor="scheduled-item-name">
-            Item name
-            <input
+          <div className="dialog-field">
+            <label htmlFor="scheduled-item-name">Item name</label>
+            <ProductNameAutocomplete
               defaultValue={editingItem?.name}
               id="scheduled-item-name"
               name="name"
+              onProductSelect={(product) => setUnit(product.unit)}
               placeholder="e.g. Basmati rice"
               required
             />
-          </label>
+          </div>
           <div className="form-grid">
             <label htmlFor="scheduled-quantity">
               Quantity
@@ -3966,10 +4116,11 @@ function ShoppingScheduleDialog({
             <label htmlFor="scheduled-unit">
               Unit
               <select
-                defaultValue={editingItem?.unit ?? 'pcs'}
                 id="scheduled-unit"
                 name="unit"
+                onChange={(event) => setUnit(event.target.value)}
                 required
+                value={unit}
               >
                 <option value="pcs">pcs</option>
                 <option value="pack">pack</option>
@@ -4020,6 +4171,177 @@ function ShoppingScheduleDialog({
   );
 }
 
+function RemoveStockDialog({
+  item,
+  onClose,
+  onSubmit,
+}: {
+  item: InventoryItem;
+  onClose: () => void;
+  onSubmit: (event: SyntheticEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <div className="dialog-overlay">
+      <dialog
+        aria-labelledby="remove-stock-dialog-title"
+        className="inventory-dialog stock-dialog"
+        open
+      >
+        <button
+          aria-label="Close stock removal dialog"
+          className="dialog-close"
+          onClick={onClose}
+          type="button"
+        >
+          <X size={17} />
+        </button>
+        <header className="dialog-header">
+          <h2 id="remove-stock-dialog-title">Use or remove stock</h2>
+          <p>Record what left this inventory batch.</p>
+        </header>
+        <div className="stock-dialog-summary">
+          <span className="food-icon">
+            {categoryIcons[item.category] ?? '📦'}
+          </span>
+          <span>
+            <strong>{item.name}</strong>
+            <small>
+              Current quantity: {item.quantity} {item.unit}
+            </small>
+          </span>
+        </div>
+        <form className="dialog-form" onSubmit={onSubmit}>
+          <label htmlFor="stock-remove-quantity">
+            Quantity to remove
+            <div className="quantity-with-unit">
+              <input
+                autoFocus
+                id="stock-remove-quantity"
+                max={item.quantity}
+                min="0.01"
+                name="quantity"
+                required
+                step="0.01"
+                type="number"
+              />
+              <span>{item.unit}</span>
+            </div>
+          </label>
+          <label htmlFor="stock-remove-reason">
+            Reason
+            <select id="stock-remove-reason" name="reason" required>
+              <option value="Used">Used</option>
+              <option value="Wasted">Spoiled / Wasted</option>
+              <option value="Other">Other</option>
+            </select>
+          </label>
+          <label htmlFor="stock-remove-note">
+            Note <span>(optional)</span>
+            <input
+              id="stock-remove-note"
+              name="note"
+              placeholder="Add a short detail"
+            />
+          </label>
+          <div className="purchase-save-note">
+            <History size={17} />
+            <span>
+              The item stays in inventory at zero and this change is saved in
+              its history.
+            </span>
+          </div>
+          <button className="primary-button dialog-submit" type="submit">
+            Remove stock
+          </button>
+        </form>
+      </dialog>
+    </div>
+  );
+}
+
+function StockHistoryDialog({
+  item,
+  onClose,
+}: {
+  item: InventoryItem;
+  onClose: () => void;
+}) {
+  const [rows, setRows] = useState<StockChange[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/stock-history?itemId=${item.id}`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Could not load stock history.');
+        setRows((await response.json()) as StockChange[]);
+      })
+      .catch((reason: Error) => {
+        if (reason.name !== 'AbortError') setError(reason.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [item.id]);
+
+  return (
+    <div className="dialog-overlay">
+      <dialog
+        aria-labelledby="stock-history-dialog-title"
+        className="inventory-dialog stock-history-dialog"
+        open
+      >
+        <button
+          aria-label="Close stock history"
+          className="dialog-close"
+          onClick={onClose}
+          type="button"
+        >
+          <X size={17} />
+        </button>
+        <header className="dialog-header">
+          <h2 id="stock-history-dialog-title">Stock history</h2>
+          <p>
+            {item.name} · {item.quantity} {item.unit} currently available
+          </p>
+        </header>
+        {loading ? (
+          <MiniEmpty text="Loading stock history..." />
+        ) : error ? (
+          <MiniEmpty text={error} />
+        ) : rows.length ? (
+          <div className="stock-history-list">
+            {rows.map((row) => (
+              <article key={row.id}>
+                <span
+                  className={row.quantityChange > 0 ? 'stock-in' : 'stock-out'}
+                >
+                  {row.quantityChange > 0 ? '+' : ''}
+                  {row.quantityChange} {row.unit}
+                </span>
+                <div>
+                  <strong>{stockReasonLabel(row.reason)}</strong>
+                  <small>
+                    {row.quantityBefore} → {row.quantityAfter} {row.unit}
+                    {row.note ? ` · ${row.note}` : ''}
+                  </small>
+                </div>
+                <time>{dateTimeLabel(row.createdAt)}</time>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <MiniEmpty text="No stock changes have been recorded yet." />
+        )}
+      </dialog>
+    </div>
+  );
+}
+
 function ItemDialog({
   editingItem,
   onClose,
@@ -4029,6 +4351,20 @@ function ItemDialog({
   onClose: () => void;
   onSubmit: (event: SyntheticEvent<HTMLFormElement>) => void;
 }) {
+  const [category, setCategory] = useState(editingItem?.category ?? 'Pantry');
+  const [unit, setUnit] = useState(editingItem?.unit ?? 'kg');
+  const [location, setLocation] = useState(editingItem?.location ?? 'Fridge');
+  const [specificSpot, setSpecificSpot] = useState(
+    editingItem?.specificSpot ?? '',
+  );
+
+  function applyProduct(product: ProductSuggestion) {
+    setCategory(product.category);
+    setUnit(product.unit);
+    setLocation(product.location);
+    setSpecificSpot(product.specificSpot ?? '');
+  }
+
   return (
     <div className="dialog-overlay">
       <dialog
@@ -4051,16 +4387,17 @@ function ItemDialog({
           <p>Record the quantity, location and expiry date.</p>
         </header>
         <form className="dialog-form" onSubmit={onSubmit}>
-          <label htmlFor="item-name">
-            Item name
-            <input
+          <div className="dialog-field">
+            <label htmlFor="item-name">Item name</label>
+            <ProductNameAutocomplete
               defaultValue={editingItem?.name}
               id="item-name"
               name="name"
+              onProductSelect={applyProduct}
               placeholder="e.g. Basmati rice"
               required
             />
-          </label>
+          </div>
           <div className="form-grid">
             <label htmlFor="item-quantity">
               Quantity
@@ -4077,13 +4414,16 @@ function ItemDialog({
             <label htmlFor="item-unit">
               Unit
               <select
-                defaultValue={editingItem?.unit ?? 'kg'}
                 id="item-unit"
                 name="unit"
+                onChange={(event) => setUnit(event.target.value)}
                 required
+                value={unit}
               >
                 <option value="kg">kg</option>
+                <option value="g">g</option>
                 <option value="L">L</option>
+                <option value="ml">ml</option>
                 <option value="pcs">pcs</option>
                 <option value="pack">pack</option>
               </select>
@@ -4093,10 +4433,11 @@ function ItemDialog({
             <label htmlFor="item-category">
               Category
               <select
-                defaultValue={editingItem?.category ?? 'Pantry'}
                 id="item-category"
                 name="category"
+                onChange={(event) => setCategory(event.target.value)}
                 required
+                value={category}
               >
                 <option>Pantry</option>
                 <option>Dairy & eggs</option>
@@ -4109,10 +4450,11 @@ function ItemDialog({
             <label htmlFor="item-location">
               Location
               <select
-                defaultValue={editingItem?.location ?? 'Fridge'}
                 id="item-location"
                 name="location"
+                onChange={(event) => setLocation(event.target.value)}
                 required
+                value={location}
               >
                 {storageLocations.map((location) => (
                   <option key={location}>{location}</option>
@@ -4127,10 +4469,11 @@ function ItemDialog({
             <label htmlFor="item-specific-spot">
               Specific spot <span>(optional)</span>
               <input
-                defaultValue={editingItem?.specificSpot ?? ''}
                 id="item-specific-spot"
                 name="specificSpot"
+                onChange={(event) => setSpecificSpot(event.target.value)}
                 placeholder="e.g. Top shelf"
+                value={specificSpot}
               />
             </label>
             <label htmlFor="item-expiry">
@@ -4160,6 +4503,18 @@ function PurchaseDialog({
   onSubmit: (event: SyntheticEvent<HTMLFormElement>) => void;
 }) {
   const today = new Date().toISOString().slice(0, 10);
+  const [category, setCategory] = useState('Pantry');
+  const [unit, setUnit] = useState('kg');
+  const [location, setLocation] = useState('Fridge');
+  const [specificSpot, setSpecificSpot] = useState('');
+
+  function applyProduct(product: ProductSuggestion) {
+    setCategory(product.category);
+    setUnit(product.unit);
+    setLocation(product.location);
+    setSpecificSpot(product.specificSpot ?? '');
+  }
+
   return (
     <div className="dialog-overlay">
       <dialog
@@ -4180,15 +4535,16 @@ function PurchaseDialog({
           <p>One entry updates inventory, expenses and price history.</p>
         </header>
         <form className="dialog-form" onSubmit={onSubmit}>
-          <label htmlFor="purchase-item-name">
-            Item name
-            <input
+          <div className="dialog-field">
+            <label htmlFor="purchase-item-name">Item name</label>
+            <ProductNameAutocomplete
               id="purchase-item-name"
               name="itemName"
+              onProductSelect={applyProduct}
               placeholder="e.g. Basmati rice"
               required
             />
-          </label>
+          </div>
           <div className="form-grid">
             <label htmlFor="purchase-quantity">
               Quantity
@@ -4203,9 +4559,17 @@ function PurchaseDialog({
             </label>
             <label htmlFor="purchase-unit">
               Unit
-              <select id="purchase-unit" name="unit" required>
+              <select
+                id="purchase-unit"
+                name="unit"
+                onChange={(event) => setUnit(event.target.value)}
+                required
+                value={unit}
+              >
                 <option value="kg">kg</option>
+                <option value="g">g</option>
                 <option value="L">L</option>
+                <option value="ml">ml</option>
                 <option value="pcs">pcs</option>
                 <option value="pack">pack</option>
               </select>
@@ -4238,7 +4602,13 @@ function PurchaseDialog({
           <div className="form-grid">
             <label htmlFor="purchase-category">
               Category
-              <select id="purchase-category" name="category" required>
+              <select
+                id="purchase-category"
+                name="category"
+                onChange={(event) => setCategory(event.target.value)}
+                required
+                value={category}
+              >
                 <option>Pantry</option>
                 <option>Dairy & eggs</option>
                 <option>Vegetables</option>
@@ -4249,10 +4619,19 @@ function PurchaseDialog({
             </label>
             <label htmlFor="purchase-location">
               Store in
-              <select id="purchase-location" name="location" required>
+              <select
+                id="purchase-location"
+                name="location"
+                onChange={(event) => setLocation(event.target.value)}
+                required
+                value={location}
+              >
                 {storageLocations.map((location) => (
                   <option key={location}>{location}</option>
                 ))}
+                <option>Kitchen</option>
+                <option>Storage</option>
+                <option>Bathroom</option>
               </select>
             </label>
           </div>
@@ -4266,7 +4645,9 @@ function PurchaseDialog({
               <input
                 id="purchase-specific-spot"
                 name="specificSpot"
+                onChange={(event) => setSpecificSpot(event.target.value)}
                 placeholder="e.g. Top shelf"
+                value={specificSpot}
               />
             </label>
           </div>
@@ -4515,6 +4896,8 @@ function shoppingGroupLabel(value: string) {
 }
 
 function itemStatus(item: InventoryItem) {
+  if (item.quantity <= 0)
+    return { label: 'Out of stock', className: 'out-of-stock' };
   const days = daysUntil(item.expiryDate);
   if (item.expiryDate && days < 0)
     return { label: 'Expired', className: 'expired' };
@@ -4548,4 +4931,34 @@ function dateLabel(value: string) {
 
 function sar(value: number) {
   return `SAR ${value.toLocaleString('en-US', { minimumFractionDigits: value % 1 ? 2 : 0, maximumFractionDigits: 2 })}`;
+}
+
+function stockReasonLabel(reason: string) {
+  if (reason === 'Wasted') return 'Spoiled / Wasted';
+  if (reason === 'Stock in') return 'Added to inventory';
+  return reason;
+}
+
+function dateTimeLabel(value: string) {
+  const normalized = value.includes('T')
+    ? value
+    : value.replace(' ', 'T') + 'Z';
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+}
+
+async function responseError(response: Response, fallback: string) {
+  try {
+    const body = (await response.json()) as { error?: string };
+    return body.error || fallback;
+  } catch {
+    return fallback;
+  }
 }

@@ -1,6 +1,7 @@
-import { asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { getDb } from '@/db';
 import { shoppingItems } from '@/db/schema';
+import { canonicalProductName } from '@/lib/products';
 
 export async function GET() {
   const rows = await getDb()
@@ -16,7 +17,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const body = (await request.json()) as Record<string, unknown>;
-  const name = textField(body.name);
+  const name = await canonicalProductName(body.name);
   const quantity = Number(body.quantity ?? 1);
   const unit = textField(body.unit) || 'pcs';
   const estimatedPrice =
@@ -35,7 +36,21 @@ export async function POST(request: Request) {
       { error: 'Please provide valid scheduled item details.' },
       { status: 400 },
     );
-  const [item] = await getDb()
+  const db = getDb();
+  const [existing] = await db
+    .select()
+    .from(shoppingItems)
+    .where(
+      and(
+        eq(shoppingItems.completed, false),
+        eq(shoppingItems.unit, unit),
+        eq(sql`lower(trim(${shoppingItems.name}))`, name.toLowerCase()),
+      ),
+    )
+    .limit(1);
+  if (existing) return Response.json(existing);
+
+  const [item] = await db
     .insert(shoppingItems)
     .values({
       name,
@@ -57,7 +72,7 @@ export async function PATCH(request: Request) {
       { status: 400 },
     );
   const completed = Boolean(body.completed);
-  const name = textField(body.name);
+  const name = await canonicalProductName(body.name);
   const quantity = Number(body.quantity);
   const unit = textField(body.unit);
   const estimatedPrice =
