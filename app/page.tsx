@@ -6,6 +6,7 @@ import {
   Box,
   CalendarClock,
   CalendarDays,
+  CalendarRange,
   ChartNoAxesCombined,
   Check,
   Clock3,
@@ -39,6 +40,7 @@ import {
 
 type Section =
   | 'Dashboard'
+  | 'Schedule'
   | 'Meal planner'
   | 'Purchases'
   | 'Inventory'
@@ -139,6 +141,7 @@ type DeleteTarget = {
 
 const navItems = [
   { label: 'Dashboard' as Section, icon: Home },
+  { label: 'Schedule' as Section, icon: CalendarRange },
   { label: 'Meal planner' as Section, icon: UtensilsCrossed },
   { label: 'Purchases' as Section, icon: PackagePlus },
   { label: 'Inventory' as Section, icon: Box },
@@ -165,6 +168,11 @@ const sectionCopy: Record<
     eyebrow: 'HOUSEHOLD OVERVIEW',
     title: 'Good morning',
     subtitle: 'Everything that needs your attention, in one place.',
+  },
+  Schedule: {
+    eyebrow: 'HOUSEHOLD CALENDAR',
+    title: 'Schedule',
+    subtitle: 'Meals, shopping, reminders and expiry dates in one view.',
   },
   'Meal planner': {
     eyebrow: 'MEAL PLANNER',
@@ -1149,6 +1157,7 @@ type SectionProps = {
 };
 
 function SectionContent(props: SectionProps) {
+  if (props.activeSection === 'Schedule') return <ScheduleView {...props} />;
   if (props.activeSection === 'Meal planner')
     return <MealPlannerView {...props} />;
   if (props.activeSection === 'Purchases') return <PurchasesView {...props} />;
@@ -1160,6 +1169,250 @@ function SectionContent(props: SectionProps) {
   if (props.activeSection === 'Reports') return <ReportsView {...props} />;
   if (props.activeSection === 'Settings') return <SettingsView {...props} />;
   return <DashboardView {...props} />;
+}
+
+type ScheduleKind = 'Meal' | 'Shopping' | 'Task' | 'Expiry';
+type ScheduleEvent = {
+  id: string;
+  date: string;
+  kind: ScheduleKind;
+  title: string;
+  detail: string;
+  time: string | null;
+  destination: Section;
+};
+
+function ScheduleView(props: SectionProps) {
+  const [selectedDate, setSelectedDate] = useState(todayIso());
+  const [filter, setFilter] = useState<'All' | ScheduleKind>('All');
+  const events = useMemo<ScheduleEvent[]>(
+    () => [
+      ...props.meals.map((meal) => ({
+        id: `meal-${meal.id}`,
+        date: meal.plannedDate,
+        kind: 'Meal' as const,
+        title: meal.name,
+        detail: `${meal.ingredients.length} ingredients${meal.notes ? ` · ${meal.notes}` : ''}`,
+        time: meal.plannedTime,
+        destination: 'Meal planner' as const,
+      })),
+      ...props.shopping
+        .filter((item) => item.scheduledDate && !item.completed)
+        .map((item) => ({
+          id: `shopping-${item.id}`,
+          date: String(item.scheduledDate),
+          kind: 'Shopping' as const,
+          title: item.name,
+          detail: `${item.quantity} ${item.unit}${item.estimatedPrice === null ? '' : ` · ${sar(item.estimatedPrice)}`}`,
+          time: null,
+          destination: 'Shopping list' as const,
+        })),
+      ...props.tasks
+        .filter((task) => task.dueDate && !task.completed)
+        .map((task) => ({
+          id: `task-${task.id}`,
+          date: String(task.dueDate),
+          kind: 'Task' as const,
+          title: task.title,
+          detail: 'Household reminder',
+          time: null,
+          destination: 'Dashboard' as const,
+        })),
+      ...props.inventory
+        .filter((item) => item.expiryDate)
+        .map((item) => ({
+          id: `expiry-${item.id}`,
+          date: String(item.expiryDate),
+          kind: 'Expiry' as const,
+          title: item.name,
+          detail: `${item.quantity} ${item.unit} · ${item.location}`,
+          time: null,
+          destination: 'Expiry' as const,
+        })),
+    ],
+    [props.inventory, props.meals, props.shopping, props.tasks],
+  );
+  const visibleEvents = events.filter(
+    (event) => filter === 'All' || event.kind === filter,
+  );
+  const active = new Date(selectedDate + 'T12:00:00');
+  const year = active.getFullYear();
+  const month = active.getMonth();
+  const firstWeekday = new Date(year, month, 1, 12).getDay();
+  const totalDays = new Date(year, month + 1, 0, 12).getDate();
+  const cells = [
+    ...Array.from({ length: firstWeekday }, () => null),
+    ...Array.from({ length: totalDays }, (_, index) => index + 1),
+  ];
+  const selectedEvents = visibleEvents
+    .filter((event) => event.date === selectedDate)
+    .sort((a, b) => (a.time ?? '99:99').localeCompare(b.time ?? '99:99'));
+  const upcoming = visibleEvents
+    .filter((event) => event.date >= todayIso())
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(0, 5);
+
+  function moveMonth(change: number) {
+    setSelectedDate(localIso(new Date(year, month + change, 1, 12)));
+  }
+
+  return (
+    <div className="unified-schedule-view">
+      <section className="panel schedule-calendar-panel">
+        <header className="schedule-calendar-header">
+          <div>
+            <CalendarRange size={21} />
+            <span>
+              <strong>
+                {new Intl.DateTimeFormat('en-US', {
+                  month: 'long',
+                  year: 'numeric',
+                }).format(active)}
+              </strong>
+              <small>{visibleEvents.length} scheduled events</small>
+            </span>
+          </div>
+          <div>
+            <button onClick={() => setSelectedDate(todayIso())} type="button">
+              Today
+            </button>
+            <button
+              aria-label="Previous month"
+              onClick={() => moveMonth(-1)}
+              type="button"
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <button
+              aria-label="Next month"
+              onClick={() => moveMonth(1)}
+              type="button"
+            >
+              <ChevronRight size={18} />
+            </button>
+          </div>
+        </header>
+        <div className="schedule-filters" aria-label="Schedule filters">
+          {(['All', 'Meal', 'Shopping', 'Task', 'Expiry'] as const).map(
+            (kind) => (
+              <button
+                className={filter === kind ? 'active' : ''}
+                key={kind}
+                onClick={() => setFilter(kind)}
+                type="button"
+              >
+                {kind !== 'All' && (
+                  <i className={`schedule-dot ${kind.toLowerCase()}`} />
+                )}
+                {kind}
+              </button>
+            ),
+          )}
+        </div>
+        <div className="schedule-weekdays">
+          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+            <span key={day}>{day}</span>
+          ))}
+        </div>
+        <div className="schedule-calendar-grid">
+          {cells.map((day, index) => {
+            if (!day)
+              return (
+                <span className="schedule-empty-cell" key={`empty-${index}`} />
+              );
+            const date = localIso(new Date(year, month, day, 12));
+            const dayEvents = visibleEvents.filter(
+              (event) => event.date === date,
+            );
+            const kinds = Array.from(
+              new Set(dayEvents.map((event) => event.kind)),
+            );
+            return (
+              <button
+                className={`${selectedDate === date ? 'selected' : ''} ${date === todayIso() ? 'today' : ''}`}
+                key={date}
+                onClick={() => setSelectedDate(date)}
+                type="button"
+              >
+                <span>{day}</span>
+                <div>
+                  {kinds.map((kind) => (
+                    <i
+                      className={`schedule-dot ${kind.toLowerCase()}`}
+                      key={kind}
+                    />
+                  ))}
+                </div>
+                {dayEvents.length > 0 && <small>{dayEvents.length}</small>}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+      <aside className="schedule-side-column">
+        <section className="panel selected-day-panel">
+          <PanelHeading
+            title={
+              selectedDate === todayIso()
+                ? "Today's schedule"
+                : dateLabel(selectedDate)
+            }
+            subtitle={`${selectedEvents.length} ${selectedEvents.length === 1 ? 'event' : 'events'}`}
+          />
+          <ScheduleEventList events={selectedEvents} onOpen={props.onGo} />
+        </section>
+        <section className="panel upcoming-schedule-panel">
+          <PanelHeading title="Upcoming" subtitle="Next scheduled items" />
+          <ScheduleEventList events={upcoming} onOpen={props.onGo} showDate />
+        </section>
+      </aside>
+    </div>
+  );
+}
+
+function ScheduleEventList({
+  events,
+  onOpen,
+  showDate = false,
+}: {
+  events: ScheduleEvent[];
+  onOpen: (section: Section) => void;
+  showDate?: boolean;
+}) {
+  if (!events.length)
+    return <MiniEmpty text="Nothing scheduled for this date." />;
+  return (
+    <div className="schedule-event-list">
+      {events.map((event) => (
+        <button
+          key={event.id}
+          onClick={() => onOpen(event.destination)}
+          type="button"
+        >
+          <i className={`schedule-event-icon ${event.kind.toLowerCase()}`}>
+            <ScheduleKindIcon kind={event.kind} />
+          </i>
+          <span>
+            <strong>{event.title}</strong>
+            <small>
+              {showDate ? `${dayMonthShort(event.date)} · ` : ''}
+              {event.time ? `${timeLabel(event.time)} · ` : ''}
+              {event.detail}
+            </small>
+          </span>
+          <em>{event.kind}</em>
+          <ChevronRight size={16} />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ScheduleKindIcon({ kind }: { kind: ScheduleKind }) {
+  if (kind === 'Meal') return <UtensilsCrossed size={16} />;
+  if (kind === 'Shopping') return <ShoppingBasket size={16} />;
+  if (kind === 'Task') return <ClipboardList size={16} />;
+  return <CalendarClock size={16} />;
 }
 
 function DashboardView(props: SectionProps) {
@@ -1641,7 +1894,10 @@ function InventoryView(props: SectionProps) {
       <div className="toolbar">
         <div>
           <strong>{props.inventory.length} items</strong>
-          <span>Keep quantities and expiry details current.</span>
+          <span>
+            Different expiry dates stay as separate batches; use the earliest
+            first.
+          </span>
         </div>
         <label>
           Category
@@ -2593,6 +2849,19 @@ function InventoryTable({
 }) {
   if (!items.length)
     return compact ? <MiniEmpty text="No inventory items yet." /> : null;
+  const batches = items.reduce<Record<string, InventoryItem[]>>(
+    (groups, item) => {
+      const key = `${item.name.toLowerCase()}|${item.unit}`;
+      (groups[key] ??= []).push(item);
+      groups[key].sort((a, b) =>
+        (a.expiryDate ?? '9999-12-31').localeCompare(
+          b.expiryDate ?? '9999-12-31',
+        ),
+      );
+      return groups;
+    },
+    {},
+  );
   return (
     <div className="table-wrap">
       <table aria-label="Inventory items">
@@ -2609,6 +2878,10 @@ function InventoryTable({
         <tbody>
           {items.map((item) => {
             const status = itemStatus(item);
+            const batchGroup =
+              batches[`${item.name.toLowerCase()}|${item.unit}`];
+            const batchNumber =
+              batchGroup.findIndex((batch) => batch.id === item.id) + 1;
             return (
               <tr key={item.id}>
                 <td aria-label={`${item.name}, ${item.category}`}>
@@ -2618,7 +2891,14 @@ function InventoryTable({
                     </span>
                     <span>
                       <strong>{item.name}</strong>
-                      <small>{item.category}</small>
+                      <small>
+                        {item.category}
+                        {batchGroup.length > 1 && (
+                          <em className="batch-label">
+                            Batch {batchNumber} of {batchGroup.length}
+                          </em>
+                        )}
+                      </small>
                     </span>
                   </span>
                 </td>
