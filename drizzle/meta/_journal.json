@@ -43,6 +43,13 @@
       "when": 1788939677177,
       "tag": "0005_chunky_shard",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1788972559651,
+      "tag": "0006_redundant_odin",
+      "breakpoints": true
     }
   ]
 }

@@ -14,6 +14,7 @@ export const inventoryItems = sqliteTable('inventory_items', {
   quantity: real('quantity').notNull(),
   unit: text('unit').notNull(),
   location: text('location').notNull(),
+  specificSpot: text('specific_spot'),
   expiryDate: text('expiry_date'),
   createdAt: text('created_at')
     .notNull()

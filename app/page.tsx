@@ -16,6 +16,7 @@ import {
   ClipboardList,
   Home,
   Lightbulb,
+  MapPin,
   Moon,
   PackagePlus,
   Pencil,
@@ -28,6 +29,7 @@ import {
   Trash2,
   UtensilsCrossed,
   WalletCards,
+  Warehouse,
   X,
 } from 'lucide-react';
 import {
@@ -44,6 +46,7 @@ type Section =
   | 'Meal planner'
   | 'Purchases'
   | 'Inventory'
+  | 'Storage'
   | 'Shopping list'
   | 'Expenses'
   | 'Expiry'
@@ -56,6 +59,7 @@ type InventoryItem = {
   quantity: number;
   unit: string;
   location: string;
+  specificSpot: string | null;
   expiryDate: string | null;
   createdAt: string;
 };
@@ -145,6 +149,7 @@ const navItems = [
   { label: 'Meal planner' as Section, icon: UtensilsCrossed },
   { label: 'Purchases' as Section, icon: PackagePlus },
   { label: 'Inventory' as Section, icon: Box },
+  { label: 'Storage' as Section, icon: Warehouse },
   { label: 'Shopping list' as Section, icon: ClipboardList },
   { label: 'Expenses' as Section, icon: WalletCards },
   { label: 'Expiry' as Section, icon: CalendarClock },
@@ -188,6 +193,11 @@ const sectionCopy: Record<
     eyebrow: 'STOCK CONTROL',
     title: 'Inventory',
     subtitle: 'Track quantities, locations and expiry dates.',
+  },
+  Storage: {
+    eyebrow: 'STORAGE',
+    title: 'Storage overview',
+    subtitle: 'See where every household item is kept.',
   },
   'Shopping list': {
     eyebrow: 'NEXT SHOP',
@@ -419,9 +429,10 @@ export default function HomeInventory() {
   const filteredInventory = useMemo(
     () =>
       inventory.filter((item) => {
-        const matchesQuery = `${item.name} ${item.category} ${item.location}`
-          .toLowerCase()
-          .includes(query.toLowerCase());
+        const matchesQuery =
+          `${item.name} ${item.category} ${item.location} ${item.specificSpot ?? ''}`
+            .toLowerCase()
+            .includes(query.toLowerCase());
         return (
           matchesQuery &&
           (categoryFilter === 'All categories' ||
@@ -1162,6 +1173,7 @@ function SectionContent(props: SectionProps) {
     return <MealPlannerView {...props} />;
   if (props.activeSection === 'Purchases') return <PurchasesView {...props} />;
   if (props.activeSection === 'Inventory') return <InventoryView {...props} />;
+  if (props.activeSection === 'Storage') return <StorageView {...props} />;
   if (props.activeSection === 'Shopping list')
     return <ShoppingView {...props} />;
   if (props.activeSection === 'Expenses') return <ExpensesView {...props} />;
@@ -1925,6 +1937,300 @@ function InventoryView(props: SectionProps) {
         title="No items yet"
       />
     </section>
+  );
+}
+
+const storageLocations = [
+  'Fridge',
+  'Freezer',
+  'Pantry',
+  'Drawer',
+  'Cabinet',
+  'Storage Box',
+] as const;
+
+function StorageView(props: SectionProps) {
+  const [storageSearch, setStorageSearch] = useState('');
+  const [locationFilter, setLocationFilter] = useState('All locations');
+  const [storageCategory, setStorageCategory] = useState('All categories');
+  const [statusFilter, setStatusFilter] = useState('All status');
+  const availableLocations = [
+    'All locations',
+    ...Array.from(
+      new Set([
+        ...storageLocations,
+        ...props.inventory.map((item) => item.location),
+      ]),
+    ),
+  ];
+  const availableCategories = [
+    'All categories',
+    ...Array.from(new Set(props.inventory.map((item) => item.category))),
+  ];
+  const filtered = props.inventory.filter((item) => {
+    const status = itemStatus(item).label;
+    const searchTarget =
+      `${item.name} ${item.location} ${item.specificSpot ?? ''}`.toLowerCase();
+    return (
+      searchTarget.includes(storageSearch.toLowerCase()) &&
+      (locationFilter === 'All locations' ||
+        item.location === locationFilter) &&
+      (storageCategory === 'All categories' ||
+        item.category === storageCategory) &&
+      (statusFilter === 'All status' || status === statusFilter)
+    );
+  });
+  const breakdown = storageLocations.map((location) => ({
+    location,
+    count: props.inventory.filter((item) => item.location === location).length,
+  }));
+  const mostUsed = [...breakdown].sort((a, b) => b.count - a.count);
+  const maxLocation = Math.max(...mostUsed.map((row) => row.count), 1);
+
+  function clearFilters() {
+    setStorageSearch('');
+    setLocationFilter('All locations');
+    setStorageCategory('All categories');
+    setStatusFilter('All status');
+  }
+
+  return (
+    <div className="storage-view">
+      <div className="storage-toolbar">
+        <label className="storage-search" htmlFor="storage-search">
+          <Search size={17} />
+          <input
+            id="storage-search"
+            onChange={(event) => setStorageSearch(event.target.value)}
+            placeholder="Search items or locations..."
+            value={storageSearch}
+          />
+        </label>
+        <select
+          aria-label="Filter by location"
+          onChange={(event) => setLocationFilter(event.target.value)}
+          value={locationFilter}
+        >
+          {availableLocations.map((location) => (
+            <option key={location}>{location}</option>
+          ))}
+        </select>
+        <select
+          aria-label="Filter by category"
+          onChange={(event) => setStorageCategory(event.target.value)}
+          value={storageCategory}
+        >
+          {availableCategories.map((category) => (
+            <option key={category}>{category}</option>
+          ))}
+        </select>
+        <select
+          aria-label="Filter by status"
+          onChange={(event) => setStatusFilter(event.target.value)}
+          value={statusFilter}
+        >
+          {['All status', 'In stock', 'Low stock', 'Expiring', 'Expired'].map(
+            (status) => (
+              <option key={status}>{status}</option>
+            ),
+          )}
+        </select>
+        <button
+          className="secondary-button"
+          onClick={clearFilters}
+          type="button"
+        >
+          Clear filters
+        </button>
+      </div>
+      <section
+        aria-label="Storage locations summary"
+        className="storage-summary-grid"
+      >
+        {storageLocations.map((location, index) => {
+          const items = props.inventory.filter(
+            (item) => item.location === location,
+          );
+          const attention = items.filter((item) => {
+            const status = itemStatus(item).label;
+            return (
+              status === 'Expiring' ||
+              status === 'Expired' ||
+              status === 'Low stock'
+            );
+          }).length;
+          return (
+            <button
+              className="storage-summary-card"
+              key={location}
+              onClick={() => setLocationFilter(location)}
+              type="button"
+            >
+              <span className={`storage-location-icon tone-${index}`}>
+                <MapPin size={20} />
+              </span>
+              <span>
+                <small>{location}</small>
+                <strong>
+                  {items.length} {items.length === 1 ? 'item' : 'items'}
+                </strong>
+                <em>
+                  {attention
+                    ? `${attention} need attention`
+                    : 'All items look good'}
+                </em>
+              </span>
+            </button>
+          );
+        })}
+      </section>
+      <div className="storage-content-grid">
+        <section className="panel storage-table-panel">
+          <PanelHeading
+            title="Items by location"
+            subtitle={`${filtered.length} of ${props.inventory.length} inventory items`}
+          />
+          <StorageTable
+            items={filtered}
+            onDelete={props.onDelete}
+            onEdit={props.onEditItem}
+          />
+        </section>
+        <aside className="storage-side-column">
+          <section className="panel locations-breakdown">
+            <PanelHeading
+              title="Locations breakdown"
+              subtitle="Items count by storage location"
+              icon={<Warehouse size={19} />}
+            />
+            <div>
+              {breakdown.map((row, index) => (
+                <button
+                  key={row.location}
+                  onClick={() => setLocationFilter(row.location)}
+                  type="button"
+                >
+                  <span className={`storage-location-icon tone-${index}`}>
+                    <MapPin size={16} />
+                  </span>
+                  <strong>{row.location}</strong>
+                  <small>{row.count}</small>
+                </button>
+              ))}
+            </div>
+          </section>
+          <section className="panel most-used-locations">
+            <PanelHeading
+              title="Most used locations"
+              subtitle="Locations with the most items"
+            />
+            <div>
+              {mostUsed.map((row, index) => (
+                <article key={row.location}>
+                  <b>{index + 1}</b>
+                  <span>
+                    <strong>{row.location}</strong>
+                    <i>
+                      <em
+                        style={{ width: `${(row.count / maxLocation) * 100}%` }}
+                      />
+                    </i>
+                  </span>
+                  <small>{row.count}</small>
+                </article>
+              ))}
+            </div>
+          </section>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function StorageTable({
+  items,
+  onEdit,
+  onDelete,
+}: {
+  items: InventoryItem[];
+  onEdit: (item: InventoryItem) => void;
+  onDelete: (target: DeleteTarget) => void;
+}) {
+  if (!items.length)
+    return <MiniEmpty text="No inventory items match these filters." />;
+  return (
+    <div className="table-wrap storage-table-wrap">
+      <table aria-label="Storage items">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Quantity</th>
+            <th>Location</th>
+            <th>Specific spot</th>
+            <th>Expiry</th>
+            <th>Status</th>
+            <th aria-label="Actions" />
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => {
+            const status = itemStatus(item);
+            return (
+              <tr key={item.id}>
+                <td aria-label={`${item.name}, ${item.category}`}>
+                  <span className="table-item">
+                    <span aria-hidden="true" className="food-icon">
+                      {categoryIcons[item.category] ?? '📦'}
+                    </span>
+                    <span>
+                      <strong>{item.name}</strong>
+                      <small>{item.category}</small>
+                    </span>
+                  </span>
+                </td>
+                <td>
+                  {item.quantity} {item.unit}
+                </td>
+                <td>{item.location}</td>
+                <td>{item.specificSpot || '—'}</td>
+                <td>
+                  {item.expiryDate ? dateLabel(item.expiryDate) : 'No expiry'}
+                </td>
+                <td>
+                  <span className={`status ${status.className}`}>
+                    {status.label}
+                  </span>
+                </td>
+                <td>
+                  <div className="row-actions">
+                    <button
+                      aria-label={`Edit ${item.name}`}
+                      onClick={() => onEdit(item)}
+                      type="button"
+                    >
+                      <Pencil size={15} />
+                    </button>
+                    <button
+                      aria-label={`Delete ${item.name}`}
+                      onClick={() =>
+                        onDelete({
+                          kind: 'inventory',
+                          id: item.id,
+                          name: item.name,
+                        })
+                      }
+                      type="button"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -3803,28 +4109,40 @@ function ItemDialog({
             <label htmlFor="item-location">
               Location
               <select
-                defaultValue={editingItem?.location ?? 'Kitchen'}
+                defaultValue={editingItem?.location ?? 'Fridge'}
                 id="item-location"
                 name="location"
                 required
               >
+                {storageLocations.map((location) => (
+                  <option key={location}>{location}</option>
+                ))}
                 <option>Kitchen</option>
-                <option>Fridge</option>
-                <option>Freezer</option>
                 <option>Storage</option>
                 <option>Bathroom</option>
               </select>
             </label>
           </div>
-          <label htmlFor="item-expiry">
-            Expiry date <span>(optional)</span>
-            <input
-              defaultValue={editingItem?.expiryDate ?? ''}
-              id="item-expiry"
-              name="expiryDate"
-              type="date"
-            />
-          </label>
+          <div className="form-grid">
+            <label htmlFor="item-specific-spot">
+              Specific spot <span>(optional)</span>
+              <input
+                defaultValue={editingItem?.specificSpot ?? ''}
+                id="item-specific-spot"
+                name="specificSpot"
+                placeholder="e.g. Top shelf"
+              />
+            </label>
+            <label htmlFor="item-expiry">
+              Expiry date <span>(optional)</span>
+              <input
+                defaultValue={editingItem?.expiryDate ?? ''}
+                id="item-expiry"
+                name="expiryDate"
+                type="date"
+              />
+            </label>
+          </div>
           <button className="primary-button dialog-submit" type="submit">
             {editingItem ? 'Save changes' : 'Save item'}
           </button>
@@ -3932,11 +4250,9 @@ function PurchaseDialog({
             <label htmlFor="purchase-location">
               Store in
               <select id="purchase-location" name="location" required>
-                <option>Kitchen</option>
-                <option>Fridge</option>
-                <option>Freezer</option>
-                <option>Storage</option>
-                <option>Bathroom</option>
+                {storageLocations.map((location) => (
+                  <option key={location}>{location}</option>
+                ))}
               </select>
             </label>
           </div>
@@ -3945,15 +4261,23 @@ function PurchaseDialog({
               Expiry date <span>(optional)</span>
               <input id="purchase-expiry" name="expiryDate" type="date" />
             </label>
-            <label htmlFor="purchase-store">
-              Shop or store <span>(optional)</span>
+            <label htmlFor="purchase-specific-spot">
+              Specific spot <span>(optional)</span>
               <input
-                id="purchase-store"
-                name="store"
-                placeholder="e.g. Lulu Hypermarket"
+                id="purchase-specific-spot"
+                name="specificSpot"
+                placeholder="e.g. Top shelf"
               />
             </label>
           </div>
+          <label htmlFor="purchase-store">
+            Shop or store <span>(optional)</span>
+            <input
+              id="purchase-store"
+              name="store"
+              placeholder="e.g. Lulu Hypermarket"
+            />
+          </label>
           <div className="purchase-save-note">
             <Check size={17} />
             <span>

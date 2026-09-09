@@ -16,6 +16,7 @@ export async function POST(request: Request) {
   const category = textField(body.category);
   const unit = textField(body.unit);
   const location = textField(body.location);
+  const specificSpot = textField(body.specificSpot);
   const store = textField(body.store);
   const purchasedAt = textField(body.purchasedAt);
   const expiryDate = textField(body.expiryDate);
@@ -53,6 +54,7 @@ export async function POST(request: Request) {
         quantity,
         unit,
         location,
+        specificSpot: specificSpot || null,
         expiryDate: expiryDate || null,
       })
       .returning(),
