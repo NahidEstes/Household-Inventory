@@ -623,6 +623,86 @@ button {
   font-style: normal;
   font-weight: 750;
 }
+.categories-view {
+  display: grid;
+  gap: 14px;
+}
+.category-summary-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.category-panel {
+  padding: 20px;
+}
+.category-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 11px;
+  margin-top: 17px;
+}
+.category-card {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+.category-card-icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 11px;
+  color: var(--primary);
+  background: var(--primary-soft);
+  font-size: 1.05rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.category-card > div:nth-child(2) {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.category-card strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.82rem;
+}
+.category-card small {
+  color: var(--muted);
+  font-size: 0.69rem;
+}
+.category-card-actions {
+  display: flex;
+  gap: 5px;
+}
+.category-card-actions button {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface);
+}
+.category-card-actions button:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  color: var(--primary);
+}
+.category-card-actions button:last-child:hover {
+  color: #d44e3c;
+}
+.category-dialog {
+  width: min(440px, 100%);
+}
 .storage-view {
   display: grid;
   gap: 14px;
@@ -3088,6 +3168,9 @@ td {
   .storage-summary-grid {
     grid-template-columns: repeat(3, 1fr);
   }
+  .category-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .storage-content-grid {
     grid-template-columns: 1fr;
   }
@@ -3161,7 +3244,8 @@ td {
   }
   .summary-grid,
   .expense-summary,
-  .purchase-summary {
+  .purchase-summary,
+  .category-summary-grid {
     grid-template-columns: 1fr;
   }
   .heading-actions {
@@ -3345,6 +3429,9 @@ td {
     grid-template-columns: 1fr;
   }
   .loading-grid {
+    grid-template-columns: 1fr;
+  }
+  .category-card-grid {
     grid-template-columns: 1fr;
   }
   .stock-history-list article {

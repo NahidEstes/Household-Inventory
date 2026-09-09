@@ -1,6 +1,7 @@
 import { desc, eq } from 'drizzle-orm';
 import { getDb } from '@/db';
 import { expenses, inventoryItems, purchases, stockChanges } from '@/db/schema';
+import { canonicalCategoryName } from '@/lib/categories';
 import { canonicalProductName } from '@/lib/products';
 
 export async function GET() {
@@ -14,7 +15,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const body = (await request.json()) as Record<string, unknown>;
   const itemName = await canonicalProductName(body.itemName);
-  const category = textField(body.category);
+  const category = await canonicalCategoryName(body.category);
   const unit = textField(body.unit);
   const location = textField(body.location);
   const specificSpot = textField(body.specificSpot);

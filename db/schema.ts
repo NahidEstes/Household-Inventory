@@ -4,6 +4,7 @@ import {
   real,
   sqliteTable,
   text,
+  uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 
@@ -20,6 +21,23 @@ export const inventoryItems = sqliteTable('inventory_items', {
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),
 });
+
+export const productCategories = sqliteTable(
+  'product_categories',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    name: text('name').notNull(),
+    normalizedName: text('normalized_name').notNull(),
+    createdAt: text('created_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex('idx_product_categories_normalized_name').on(
+      table.normalizedName,
+    ),
+  ],
+);
 
 export const stockChanges = sqliteTable(
   'stock_changes',

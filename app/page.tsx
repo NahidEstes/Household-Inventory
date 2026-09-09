@@ -28,6 +28,7 @@ import {
   Settings,
   ShoppingBasket,
   Sun,
+  Tags,
   Trash2,
   UtensilsCrossed,
   WalletCards,
@@ -52,6 +53,7 @@ type Section =
   | 'Meal planner'
   | 'Purchases'
   | 'Inventory'
+  | 'Categories'
   | 'Storage'
   | 'Shopping list'
   | 'Expenses'
@@ -114,6 +116,13 @@ type StockChange = {
   note: string | null;
   createdAt: string;
 };
+type ProductCategory = {
+  id: number;
+  name: string;
+  normalizedName: string;
+  itemCount: number;
+  createdAt: string;
+};
 type MealIngredient = {
   id: number;
   mealId: number;
@@ -167,6 +176,7 @@ const navItems = [
   { label: 'Meal planner' as Section, icon: UtensilsCrossed },
   { label: 'Purchases' as Section, icon: PackagePlus },
   { label: 'Inventory' as Section, icon: Box },
+  { label: 'Categories' as Section, icon: Tags },
   { label: 'Storage' as Section, icon: Warehouse },
   { label: 'Shopping list' as Section, icon: ClipboardList },
   { label: 'Expenses' as Section, icon: WalletCards },
@@ -212,6 +222,11 @@ const sectionCopy: Record<
     title: 'Inventory',
     subtitle: 'Track quantities, locations and expiry dates.',
   },
+  Categories: {
+    eyebrow: 'ITEM ORGANISATION',
+    title: 'Categories',
+    subtitle: 'Keep product groups clear and consistent across your stock.',
+  },
   Storage: {
     eyebrow: 'STORAGE',
     title: 'Storage overview',
@@ -253,6 +268,9 @@ export default function HomeInventory() {
   const [shopping, setShopping] = useState<ShoppingItem[]>([]);
   const [meals, setMeals] = useState<MealPlan[]>([]);
   const [tasks, setTasks] = useState<HouseholdTask[]>([]);
+  const [productCategories, setProductCategories] = useState<ProductCategory[]>(
+    [],
+  );
   const [settings, setSettings] = useState<HouseholdSettings>({
     id: 1,
     householdName: 'My Household',
@@ -280,6 +298,11 @@ export default function HomeInventory() {
   const [stockRemovalItem, setStockRemovalItem] =
     useState<InventoryItem | null>(null);
   const [historyItem, setHistoryItem] = useState<InventoryItem | null>(null);
+  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
+  const [editingCategory, setEditingCategory] =
+    useState<ProductCategory | null>(null);
+  const [categoryDeleteTarget, setCategoryDeleteTarget] =
+    useState<ProductCategory | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -297,6 +320,7 @@ export default function HomeInventory() {
           '/api/meals',
           '/api/tasks',
           '/api/settings',
+          '/api/categories',
         ].map((url) => fetch(url)),
       );
       if (responses.some((response) => !response.ok))
@@ -309,6 +333,7 @@ export default function HomeInventory() {
         mealData,
         taskData,
         settingsData,
+        categoryData,
       ] = await Promise.all(responses.map((response) => response.json()));
       setInventory(inventoryData as InventoryItem[]);
       setExpenses(expenseData as Expense[]);
@@ -317,6 +342,7 @@ export default function HomeInventory() {
       setMeals(mealData as MealPlan[]);
       setTasks(taskData as HouseholdTask[]);
       setSettings(settingsData as HouseholdSettings);
+      setProductCategories(categoryData as ProductCategory[]);
     } catch {
       setError('We could not load your household data. Please try again.');
     } finally {
@@ -441,11 +467,25 @@ export default function HomeInventory() {
   );
   const remainingBudget = Math.max(settings.monthlyBudget - spentTotal, 0);
   const categories = useMemo(
-    () => [
-      'All categories',
-      ...Array.from(new Set(inventory.map((item) => item.category))),
-    ],
-    [inventory],
+    () => ['All categories', ...productCategories.map((item) => item.name)],
+    [productCategories],
+  );
+  const categoryRecords = useMemo(
+    () =>
+      productCategories.map((category) => ({
+        ...category,
+        itemCount: inventory.filter(
+          (item) => item.category.toLowerCase() === category.name.toLowerCase(),
+        ).length,
+      })),
+    [inventory, productCategories],
+  );
+  const filteredCategoryRecords = useMemo(
+    () =>
+      categoryRecords.filter((category) =>
+        category.name.toLowerCase().includes(query.toLowerCase()),
+      ),
+    [categoryRecords, query],
   );
   const filteredInventory = useMemo(
     () =>
@@ -866,6 +906,84 @@ export default function HomeInventory() {
     setDeleteTarget(null);
   }
 
+  function openNewCategory() {
+    setEditingCategory(null);
+    setCategoryDialogOpen(true);
+  }
+
+  function openEditCategory(category: ProductCategory) {
+    setEditingCategory(category);
+    setCategoryDialogOpen(true);
+  }
+
+  async function saveCategory(event: SyntheticEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const payload = Object.fromEntries(
+      new FormData(event.currentTarget).entries(),
+    );
+    if (editingCategory) payload.id = String(editingCategory.id);
+    const response = await fetch('/api/categories', {
+      method: editingCategory ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok)
+      return showNotice(
+        await responseError(response, 'Could not save the category.'),
+      );
+    const category = (await response.json()) as ProductCategory;
+    if (editingCategory) {
+      const previousName = editingCategory.name.toLowerCase();
+      setInventory((rows) =>
+        rows.map((item) =>
+          item.category.toLowerCase() === previousName
+            ? { ...item, category: category.name }
+            : item,
+        ),
+      );
+      setPurchases((rows) =>
+        rows.map((item) =>
+          item.category.toLowerCase() === previousName
+            ? { ...item, category: category.name }
+            : item,
+        ),
+      );
+      setProductCategories((rows) =>
+        rows
+          .map((item) => (item.id === category.id ? category : item))
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      );
+    } else {
+      setProductCategories((rows) =>
+        [...rows, category].sort((a, b) => a.name.localeCompare(b.name)),
+      );
+    }
+    setCategoryDialogOpen(false);
+    setEditingCategory(null);
+    showNotice(
+      editingCategory
+        ? `${category.name} was updated everywhere.`
+        : `${category.name} category was created.`,
+    );
+  }
+
+  async function confirmDeleteCategory() {
+    if (!categoryDeleteTarget || categoryDeleteTarget.itemCount > 0) return;
+    const response = await fetch(
+      `/api/categories?id=${categoryDeleteTarget.id}`,
+      { method: 'DELETE' },
+    );
+    if (!response.ok)
+      return showNotice(
+        await responseError(response, 'Could not delete the category.'),
+      );
+    setProductCategories((rows) =>
+      rows.filter((item) => item.id !== categoryDeleteTarget.id),
+    );
+    showNotice(`${categoryDeleteTarget.name} category was deleted.`);
+    setCategoryDeleteTarget(null);
+  }
+
   async function saveSettings(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     const payload = Object.fromEntries(
@@ -975,6 +1093,7 @@ export default function HomeInventory() {
             <HeaderActions
               section={activeSection}
               onAddExpense={() => setExpenseDialogOpen(true)}
+              onAddCategory={openNewCategory}
               onAddItem={openNewItem}
               onAddPurchase={() => setPurchaseDialogOpen(true)}
               onScheduleShopping={() => openNewShoppingItem()}
@@ -1011,6 +1130,7 @@ export default function HomeInventory() {
             <SectionContent
               activeSection={activeSection}
               categoryFilter={categoryFilter}
+              categoryRecords={filteredCategoryRecords}
               categories={categories}
               expenses={filteredExpenses}
               purchases={filteredPurchases}
@@ -1021,12 +1141,15 @@ export default function HomeInventory() {
               inventoryByCategory={inventoryByCategory}
               monthlyBudget={settings.monthlyBudget}
               onAddExpense={() => setExpenseDialogOpen(true)}
+              onAddCategory={openNewCategory}
               onAddItem={openNewItem}
               onAddPurchase={() => setPurchaseDialogOpen(true)}
               onEditShopping={openEditShoppingItem}
               onEditMeal={openEditMeal}
               onDelete={setDeleteTarget}
               onEditItem={openEditItem}
+              onEditCategory={openEditCategory}
+              onDeleteCategory={setCategoryDeleteTarget}
               onRemoveStock={setStockRemovalItem}
               onViewHistory={setHistoryItem}
               onAddToShopping={addOutOfStockToShopping}
@@ -1071,6 +1194,7 @@ export default function HomeInventory() {
 
       {itemDialogOpen && (
         <ItemDialog
+          categories={productCategories}
           editingItem={editingItem}
           onClose={() => setItemDialogOpen(false)}
           onSubmit={saveInventoryItem}
@@ -1084,6 +1208,7 @@ export default function HomeInventory() {
       )}
       {purchaseDialogOpen && (
         <PurchaseDialog
+          categories={productCategories}
           onClose={() => setPurchaseDialogOpen(false)}
           onSubmit={savePurchase}
         />
@@ -1130,6 +1255,23 @@ export default function HomeInventory() {
           onClose={() => setHistoryItem(null)}
         />
       )}
+      {categoryDialogOpen && (
+        <CategoryDialog
+          editingCategory={editingCategory}
+          onClose={() => {
+            setCategoryDialogOpen(false);
+            setEditingCategory(null);
+          }}
+          onSubmit={saveCategory}
+        />
+      )}
+      {categoryDeleteTarget && (
+        <CategoryDeleteDialog
+          category={categoryDeleteTarget}
+          onCancel={() => setCategoryDeleteTarget(null)}
+          onConfirm={confirmDeleteCategory}
+        />
+      )}
       {deleteTarget && (
         <ConfirmDialog
           name={deleteTarget.name}
@@ -1143,6 +1285,7 @@ export default function HomeInventory() {
 
 function HeaderActions({
   section,
+  onAddCategory,
   onAddMeal,
   onAddExpense,
   onAddItem,
@@ -1151,6 +1294,7 @@ function HeaderActions({
   onGenerateShopping,
 }: {
   section: Section;
+  onAddCategory: () => void;
   onAddMeal: () => void;
   onAddExpense: () => void;
   onAddItem: () => void;
@@ -1195,6 +1339,12 @@ function HeaderActions({
         <PackagePlus size={18} /> Add item
       </button>
     );
+  if (section === 'Categories')
+    return (
+      <button className="primary-button" onClick={onAddCategory} type="button">
+        <Plus size={18} /> New category
+      </button>
+    );
   if (section === 'Expenses')
     return (
       <button className="primary-button" onClick={onAddExpense} type="button">
@@ -1221,6 +1371,7 @@ function HeaderActions({
 type SectionProps = {
   activeSection: Section;
   categoryFilter: string;
+  categoryRecords: ProductCategory[];
   categories: string[];
   expenses: Expense[];
   purchases: Purchase[];
@@ -1231,6 +1382,7 @@ type SectionProps = {
   inventoryByCategory: [string, number][];
   monthlyBudget: number;
   onAddExpense: () => void;
+  onAddCategory: () => void;
   onAddItem: () => void;
   onAddPurchase: () => void;
   onAddMeal: (date?: string) => void;
@@ -1239,6 +1391,8 @@ type SectionProps = {
   onEditShopping: (item: ShoppingItem) => void;
   onEditMeal: (meal: MealPlan) => void;
   onEditItem: (item: InventoryItem) => void;
+  onEditCategory: (category: ProductCategory) => void;
+  onDeleteCategory: (category: ProductCategory) => void;
   onRemoveStock: (item: InventoryItem) => void;
   onViewHistory: (item: InventoryItem) => void;
   onAddToShopping: (item: InventoryItem) => void;
@@ -1266,6 +1420,8 @@ function SectionContent(props: SectionProps) {
     return <MealPlannerView {...props} />;
   if (props.activeSection === 'Purchases') return <PurchasesView {...props} />;
   if (props.activeSection === 'Inventory') return <InventoryView {...props} />;
+  if (props.activeSection === 'Categories')
+    return <CategoriesView {...props} />;
   if (props.activeSection === 'Storage') return <StorageView {...props} />;
   if (props.activeSection === 'Shopping list')
     return <ShoppingView {...props} />;
@@ -2036,6 +2192,96 @@ function InventoryView(props: SectionProps) {
         title="No items yet"
       />
     </section>
+  );
+}
+
+function CategoriesView(props: SectionProps) {
+  const totalItems = props.categoryRecords.reduce(
+    (sum, category) => sum + category.itemCount,
+    0,
+  );
+  const unused = props.categoryRecords.filter(
+    (category) => category.itemCount === 0,
+  ).length;
+
+  return (
+    <div className="categories-view">
+      <section className="summary-grid category-summary-grid">
+        <SummaryCard
+          icon={<Tags size={20} />}
+          label="Product categories"
+          note="Available across inventory and purchases"
+          value={String(props.categoryRecords.length)}
+        />
+        <SummaryCard
+          icon={<Box size={20} />}
+          label="Categorised items"
+          note="Current inventory batches"
+          value={String(totalItems)}
+        />
+        <SummaryCard
+          icon={<Check size={20} />}
+          label="Unused categories"
+          note="Safe to remove if no longer needed"
+          value={String(unused)}
+        />
+      </section>
+      <section className="panel category-panel">
+        <PanelHeading
+          action="New category"
+          onAction={props.onAddCategory}
+          subtitle="Rename a category to update every linked inventory item"
+          title="All categories"
+        />
+        {props.categoryRecords.length ? (
+          <div className="category-card-grid">
+            {props.categoryRecords.map((category) => (
+              <article className="category-card" key={category.id}>
+                <span className="category-card-icon" aria-hidden="true">
+                  {categoryIcons[category.name] ?? category.name.slice(0, 1)}
+                </span>
+                <div>
+                  <strong>{category.name}</strong>
+                  <small>
+                    {category.itemCount}{' '}
+                    {category.itemCount === 1
+                      ? 'inventory item'
+                      : 'inventory items'}
+                  </small>
+                </div>
+                <div className="category-card-actions">
+                  <button
+                    aria-label={`Rename ${category.name}`}
+                    onClick={() => props.onEditCategory(category)}
+                    title="Rename category"
+                    type="button"
+                  >
+                    <Pencil size={15} />
+                  </button>
+                  <button
+                    aria-label={`Delete ${category.name}`}
+                    onClick={() => props.onDeleteCategory(category)}
+                    title="Delete category"
+                    type="button"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            action="Create category"
+            icon={<Tags size={24} />}
+            onAction={props.onAddCategory}
+            show
+            text="Create a category or clear the current search."
+            title="No categories found"
+          />
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -4342,16 +4588,133 @@ function StockHistoryDialog({
   );
 }
 
+function CategoryDialog({
+  editingCategory,
+  onClose,
+  onSubmit,
+}: {
+  editingCategory: ProductCategory | null;
+  onClose: () => void;
+  onSubmit: (event: SyntheticEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <div className="dialog-overlay">
+      <dialog
+        aria-labelledby="category-dialog-title"
+        className="inventory-dialog category-dialog"
+        open
+      >
+        <button
+          aria-label="Close category dialog"
+          className="dialog-close"
+          onClick={onClose}
+          type="button"
+        >
+          <X size={17} />
+        </button>
+        <header className="dialog-header">
+          <h2 id="category-dialog-title">
+            {editingCategory ? 'Rename category' : 'New category'}
+          </h2>
+          <p>
+            {editingCategory
+              ? 'Linked inventory and purchase records will update together.'
+              : 'The category will be available in inventory and purchase forms.'}
+          </p>
+        </header>
+        <form className="dialog-form" onSubmit={onSubmit}>
+          <label htmlFor="category-name">
+            Category name
+            <input
+              autoFocus
+              defaultValue={editingCategory?.name}
+              id="category-name"
+              maxLength={60}
+              name="name"
+              placeholder="e.g. Fresh produce"
+              required
+            />
+          </label>
+          <button className="primary-button dialog-submit" type="submit">
+            {editingCategory ? 'Save name' : 'Create category'}
+          </button>
+        </form>
+      </dialog>
+    </div>
+  );
+}
+
+function CategoryDeleteDialog({
+  category,
+  onCancel,
+  onConfirm,
+}: {
+  category: ProductCategory;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const isLinked = category.itemCount > 0;
+  return (
+    <div className="dialog-overlay">
+      <dialog
+        aria-labelledby="category-delete-title"
+        className="inventory-dialog confirm-dialog"
+        open
+      >
+        <div className="confirm-icon">
+          <AlertTriangle size={22} />
+        </div>
+        <h2 id="category-delete-title">
+          {isLinked ? 'Category is still in use' : 'Delete category?'}
+        </h2>
+        <p>
+          {isLinked
+            ? `${category.name} is linked to ${category.itemCount} ${category.itemCount === 1 ? 'inventory item' : 'inventory items'}. Rename it or move those items to another category first.`
+            : `${category.name} is not linked to inventory. You can safely remove it.`}
+        </p>
+        <div className="confirm-actions">
+          {isLinked ? (
+            <button className="primary-button" onClick={onCancel} type="button">
+              Close
+            </button>
+          ) : (
+            <>
+              <button
+                className="secondary-button"
+                onClick={onCancel}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="danger-button"
+                onClick={onConfirm}
+                type="button"
+              >
+                Delete category
+              </button>
+            </>
+          )}
+        </div>
+      </dialog>
+    </div>
+  );
+}
+
 function ItemDialog({
+  categories,
   editingItem,
   onClose,
   onSubmit,
 }: {
+  categories: ProductCategory[];
   editingItem: InventoryItem | null;
   onClose: () => void;
   onSubmit: (event: SyntheticEvent<HTMLFormElement>) => void;
 }) {
-  const [category, setCategory] = useState(editingItem?.category ?? 'Pantry');
+  const [category, setCategory] = useState(
+    editingItem?.category ?? categories[0]?.name ?? '',
+  );
   const [unit, setUnit] = useState(editingItem?.unit ?? 'kg');
   const [location, setLocation] = useState(editingItem?.location ?? 'Fridge');
   const [specificSpot, setSpecificSpot] = useState(
@@ -4433,19 +4796,20 @@ function ItemDialog({
             <label htmlFor="item-category">
               Category
               <select
+                disabled={!categories.length}
                 id="item-category"
                 name="category"
                 onChange={(event) => setCategory(event.target.value)}
                 required
                 value={category}
               >
-                <option>Pantry</option>
-                <option>Dairy & eggs</option>
-                <option>Vegetables</option>
-                <option>Frozen</option>
-                <option>Household</option>
-                <option>Other</option>
+                {categories.map((item) => (
+                  <option key={item.id}>{item.name}</option>
+                ))}
               </select>
+              {!categories.length && (
+                <small>Create a category before saving inventory.</small>
+              )}
             </label>
             <label htmlFor="item-location">
               Location
@@ -4496,14 +4860,16 @@ function ItemDialog({
 }
 
 function PurchaseDialog({
+  categories,
   onClose,
   onSubmit,
 }: {
+  categories: ProductCategory[];
   onClose: () => void;
   onSubmit: (event: SyntheticEvent<HTMLFormElement>) => void;
 }) {
   const today = new Date().toISOString().slice(0, 10);
-  const [category, setCategory] = useState('Pantry');
+  const [category, setCategory] = useState(categories[0]?.name ?? '');
   const [unit, setUnit] = useState('kg');
   const [location, setLocation] = useState('Fridge');
   const [specificSpot, setSpecificSpot] = useState('');
@@ -4603,19 +4969,20 @@ function PurchaseDialog({
             <label htmlFor="purchase-category">
               Category
               <select
+                disabled={!categories.length}
                 id="purchase-category"
                 name="category"
                 onChange={(event) => setCategory(event.target.value)}
                 required
                 value={category}
               >
-                <option>Pantry</option>
-                <option>Dairy & eggs</option>
-                <option>Vegetables</option>
-                <option>Frozen</option>
-                <option>Household</option>
-                <option>Other</option>
+                {categories.map((item) => (
+                  <option key={item.id}>{item.name}</option>
+                ))}
               </select>
+              {!categories.length && (
+                <small>Create a category before saving purchases.</small>
+              )}
             </label>
             <label htmlFor="purchase-location">
               Store in
