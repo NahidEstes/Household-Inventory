@@ -103,6 +103,22 @@ export const mealIngredients = sqliteTable(
   (table) => [index('idx_meal_ingredients_meal_id').on(table.mealId)],
 );
 
+export const householdTasks = sqliteTable(
+  'household_tasks',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    title: text('title').notNull(),
+    dueDate: text('due_date'),
+    completed: integer('completed', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    createdAt: text('created_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index('idx_household_tasks_due_date').on(table.dueDate)],
+);
+
 export const householdSettings = sqliteTable('household_settings', {
   id: integer('id').primaryKey(),
   householdName: text('household_name').notNull().default('My Household'),

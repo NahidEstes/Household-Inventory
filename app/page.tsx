@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  AlertTriangle,
   Bell,
   Box,
   CalendarClock,
@@ -13,9 +14,12 @@ import {
   CircleDollarSign,
   ClipboardList,
   Home,
+  Lightbulb,
   Moon,
   PackagePlus,
   Pencil,
+  Plus,
+  ReceiptText,
   Search,
   Settings,
   ShoppingBasket,
@@ -120,8 +124,15 @@ type HouseholdSettings = {
   householdName: string;
   monthlyBudget: number;
 };
+type HouseholdTask = {
+  id: number;
+  title: string;
+  dueDate: string | null;
+  completed: boolean;
+  createdAt: string;
+};
 type DeleteTarget = {
-  kind: 'inventory' | 'expense' | 'shopping' | 'purchase' | 'meal';
+  kind: 'inventory' | 'expense' | 'shopping' | 'purchase' | 'meal' | 'task';
   id: number;
   name: string;
 } | null;
@@ -205,6 +216,7 @@ export default function HomeInventory() {
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [shopping, setShopping] = useState<ShoppingItem[]>([]);
   const [meals, setMeals] = useState<MealPlan[]>([]);
+  const [tasks, setTasks] = useState<HouseholdTask[]>([]);
   const [settings, setSettings] = useState<HouseholdSettings>({
     id: 1,
     householdName: 'My Household',
@@ -218,6 +230,7 @@ export default function HomeInventory() {
   const [purchaseDialogOpen, setPurchaseDialogOpen] = useState(false);
   const [shoppingDialogOpen, setShoppingDialogOpen] = useState(false);
   const [mealDialogOpen, setMealDialogOpen] = useState(false);
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingMeal, setEditingMeal] = useState<MealPlan | null>(null);
   const [selectedMealDate, setSelectedMealDate] = useState(todayIso());
   const [mealWeekStart, setMealWeekStart] = useState(
@@ -243,6 +256,7 @@ export default function HomeInventory() {
           '/api/purchases',
           '/api/shopping',
           '/api/meals',
+          '/api/tasks',
           '/api/settings',
         ].map((url) => fetch(url)),
       );
@@ -254,6 +268,7 @@ export default function HomeInventory() {
         purchaseData,
         shoppingData,
         mealData,
+        taskData,
         settingsData,
       ] = await Promise.all(responses.map((response) => response.json()));
       setInventory(inventoryData as InventoryItem[]);
@@ -261,6 +276,7 @@ export default function HomeInventory() {
       setPurchases(purchaseData as Purchase[]);
       setShopping(shoppingData as ShoppingItem[]);
       setMeals(mealData as MealPlan[]);
+      setTasks(taskData as HouseholdTask[]);
       setSettings(settingsData as HouseholdSettings);
     } catch {
       setError('We could not load your household data. Please try again.');
@@ -635,6 +651,39 @@ export default function HomeInventory() {
     );
   }
 
+  async function saveTask(event: SyntheticEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const payload = Object.fromEntries(
+      new FormData(event.currentTarget).entries(),
+    );
+    const response = await fetch('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) return showNotice('Could not save the reminder.');
+    const task = (await response.json()) as HouseholdTask;
+    setTasks((rows) => [...rows, task].sort(compareTasks));
+    setTaskDialogOpen(false);
+    showNotice('Reminder added.');
+  }
+
+  async function toggleTask(task: HouseholdTask) {
+    const completed = !task.completed;
+    setTasks((rows) =>
+      rows.map((row) => (row.id === task.id ? { ...row, completed } : row)),
+    );
+    const response = await fetch('/api/tasks', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: task.id, completed }),
+    });
+    if (!response.ok) {
+      setTasks((rows) => rows.map((row) => (row.id === task.id ? task : row)));
+      showNotice('Could not update the reminder.');
+    }
+  }
+
   async function saveShoppingItem(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     const payload = Object.fromEntries(
@@ -692,7 +741,9 @@ export default function HomeInventory() {
             ? 'expenses'
             : deleteTarget.kind === 'meal'
               ? 'meals'
-              : 'shopping';
+              : deleteTarget.kind === 'task'
+                ? 'tasks'
+                : 'shopping';
     const response = await fetch(`/api/${endpoint}?id=${deleteTarget.id}`, {
       method: 'DELETE',
     });
@@ -709,6 +760,8 @@ export default function HomeInventory() {
       setShopping((rows) => rows.filter((row) => row.id !== deleteTarget.id));
     if (deleteTarget.kind === 'meal')
       setMeals((rows) => rows.filter((row) => row.id !== deleteTarget.id));
+    if (deleteTarget.kind === 'task')
+      setTasks((rows) => rows.filter((row) => row.id !== deleteTarget.id));
     if (deleteTarget.kind === 'purchase') {
       setPurchases((rows) => rows.filter((row) => row.id !== deleteTarget.id));
       setInventory((rows) =>
@@ -871,6 +924,7 @@ export default function HomeInventory() {
               expiryItems={expiryItems}
               inventory={filteredInventory}
               meals={filteredMeals}
+              tasks={tasks}
               inventoryByCategory={inventoryByCategory}
               monthlyBudget={settings.monthlyBudget}
               onAddExpense={() => setExpenseDialogOpen(true)}
@@ -885,8 +939,10 @@ export default function HomeInventory() {
               onSaveSettings={saveSettings}
               onScheduleShopping={openNewShoppingItem}
               onAddMeal={openNewMeal}
+              onAddTask={() => setTaskDialogOpen(true)}
               onGenerateShopping={generateMealShoppingList}
               onToggleShopping={toggleShopping}
+              onToggleTask={toggleTask}
               remainingBudget={remainingBudget}
               settings={settings}
               shopping={filteredShopping}
@@ -957,6 +1013,12 @@ export default function HomeInventory() {
             setEditingMeal(null);
           }}
           onSubmit={saveMeal}
+        />
+      )}
+      {taskDialogOpen && (
+        <TaskDialog
+          onClose={() => setTaskDialogOpen(false)}
+          onSubmit={saveTask}
         />
       )}
       {deleteTarget && (
@@ -1056,12 +1118,14 @@ type SectionProps = {
   expiryItems: InventoryItem[];
   inventory: InventoryItem[];
   meals: MealPlan[];
+  tasks: HouseholdTask[];
   inventoryByCategory: [string, number][];
   monthlyBudget: number;
   onAddExpense: () => void;
   onAddItem: () => void;
   onAddPurchase: () => void;
   onAddMeal: (date?: string) => void;
+  onAddTask: () => void;
   onDelete: (target: DeleteTarget) => void;
   onEditShopping: (item: ShoppingItem) => void;
   onEditMeal: (meal: MealPlan) => void;
@@ -1073,6 +1137,7 @@ type SectionProps = {
   onGenerateShopping: () => void;
   onSelectShoppingDate: (date: string) => void;
   onToggleShopping: (item: ShoppingItem) => void;
+  onToggleTask: (task: HouseholdTask) => void;
   remainingBudget: number;
   settings: HouseholdSettings;
   shopping: ShoppingItem[];
@@ -1099,19 +1164,44 @@ function SectionContent(props: SectionProps) {
 
 function DashboardView(props: SectionProps) {
   const expiringSoon = props.expiryItems.filter(
-    (item) => daysUntil(item.expiryDate) <= 7,
+    (item) =>
+      daysUntil(item.expiryDate) >= 0 && daysUntil(item.expiryDate) <= 7,
   );
+  const lowStock = props.inventory.filter((item) => item.quantity <= 1);
+  const currentMonth = todayIso().slice(0, 7);
+  const monthExpenses = props.expenses.filter((item) =>
+    item.spentAt.startsWith(currentMonth),
+  );
+  const monthSpend = monthExpenses.reduce((sum, item) => sum + item.amount, 0);
+  const remaining = Math.max(props.monthlyBudget - monthSpend, 0);
+  const monthCategories = Object.entries(
+    monthExpenses.reduce<Record<string, number>>((totals, item) => {
+      totals[item.category] = (totals[item.category] ?? 0) + item.amount;
+      return totals;
+    }, {}),
+  ).sort((a, b) => b[1] - a[1]);
+  const monthlyTrend = lastSixMonths().map(({ key, label }) => ({
+    key,
+    label,
+    value: props.expenses
+      .filter((item) => item.spentAt.startsWith(key))
+      .reduce((sum, item) => sum + item.amount, 0),
+  }));
+  const todayMeals = props.meals
+    .filter((meal) => meal.plannedDate === todayIso())
+    .sort(compareMeals);
+  const openShopping = props.shopping.filter((item) => !item.completed);
   const summary = [
     {
       label: 'Spent this month',
-      value: sar(props.spentTotal),
-      note: `${Math.min((props.spentTotal / props.monthlyBudget) * 100, 100).toFixed(0)}% of budget`,
+      value: sar(monthSpend),
+      note: `${Math.min((monthSpend / props.monthlyBudget) * 100, 100).toFixed(0)}% of budget`,
       icon: WalletCards,
       tone: 'green',
     },
     {
       label: 'Budget remaining',
-      value: sar(props.remainingBudget),
+      value: sar(remaining),
       note: `Monthly budget ${sar(props.monthlyBudget)}`,
       icon: CircleDollarSign,
       tone: 'mint',
@@ -1130,10 +1220,20 @@ function DashboardView(props: SectionProps) {
       icon: CalendarClock,
       tone: 'coral',
     },
+    {
+      label: 'Low stock items',
+      value: String(lowStock.length),
+      note: lowStock.length ? 'Need restocking' : 'Stock levels look good',
+      icon: AlertTriangle,
+      tone: 'amber',
+    },
   ];
   return (
-    <>
-      <section aria-label="Household summary" className="summary-grid">
+    <div className="dashboard-overview">
+      <section
+        aria-label="Household summary"
+        className="summary-grid dashboard-summary-grid"
+      >
         {summary.map(({ label, value, note, icon: Icon, tone }) => (
           <article className="summary-card" key={label}>
             <div className={`summary-icon ${tone}`}>
@@ -1147,28 +1247,63 @@ function DashboardView(props: SectionProps) {
           </article>
         ))}
       </section>
-      <div className="dashboard-grid">
-        <section className="panel spend-panel">
+      <div className="dashboard-analytics-grid">
+        <section className="panel dashboard-chart-card">
           <PanelHeading
             title="Monthly spending"
-            subtitle="Expenses by category"
+            subtitle="Your household expense trend"
             action="View report"
             onAction={() => props.onGo('Reports')}
           />
-          <div className="spending-total">
-            <strong>{sar(props.spentTotal)}</strong>
-            <span>{props.expenses.length} transactions</span>
-          </div>
-          <CategoryBars
-            rows={props.spendingByCategory}
-            emptyText="Add your first expense to see a breakdown."
-          />
+          <MonthlySpendingChart rows={monthlyTrend} />
         </section>
-        <aside className="panel">
+        <section className="panel dashboard-donut-card">
+          <PanelHeading
+            title="Spending by category"
+            subtitle="This month's expenses"
+          />
+          <SpendingDonut rows={monthCategories} total={monthSpend} />
+        </section>
+        <section className="panel dashboard-today-card">
+          <PanelHeading
+            title="Today's meal plan"
+            subtitle={dateLabel(todayIso())}
+            action="View plan"
+            onAction={() => props.onGo('Meal planner')}
+          />
+          <div className="dashboard-meal-list">
+            {todayMeals.length ? (
+              todayMeals.map((meal) => <MealRow key={meal.id} meal={meal} />)
+            ) : (
+              <MiniEmpty text="No meals planned for today." />
+            )}
+          </div>
+        </section>
+      </div>
+      <div className="dashboard-middle-grid">
+        <section className="panel dashboard-quick-actions">
+          <PanelHeading title="Quick actions" subtitle="Common tasks" />
+          <div>
+            <button onClick={props.onAddItem} type="button">
+              <PackagePlus size={18} /> Add item
+            </button>
+            <button onClick={props.onAddPurchase} type="button">
+              <ReceiptText size={18} /> Purchase
+            </button>
+            <button onClick={props.onAddExpense} type="button">
+              <WalletCards size={18} /> Expense
+            </button>
+            <button onClick={() => props.onAddMeal()} type="button">
+              <UtensilsCrossed size={18} /> Meal
+            </button>
+          </div>
+        </section>
+        <section className="panel dashboard-alerts-card">
           <PanelHeading
             title="Expiry alerts"
             subtitle="Use these items soon"
-            icon={<CalendarClock size={21} />}
+            action="View all"
+            onAction={() => props.onGo('Expiry')}
           />
           {expiringSoon.length ? (
             <div className="alert-list">
@@ -1179,15 +1314,74 @@ function DashboardView(props: SectionProps) {
           ) : (
             <MiniEmpty text="Nothing expires in the next 7 days." />
           )}
+        </section>
+        <section className="panel dashboard-tasks-card">
+          <PanelHeading
+            title="Tasks & reminders"
+            subtitle="Keep your household on track"
+          />
+          <div className="dashboard-task-list">
+            {props.tasks.length ? (
+              props.tasks.slice(0, 5).map((task) => (
+                <article
+                  className={task.completed ? 'completed' : ''}
+                  key={task.id}
+                >
+                  <label>
+                    <input
+                      checked={task.completed}
+                      onChange={() => props.onToggleTask(task)}
+                      type="checkbox"
+                    />
+                    <span>{task.title}</span>
+                  </label>
+                  <small>
+                    {task.dueDate ? dayMonthShort(task.dueDate) : 'No date'}
+                  </small>
+                  <button
+                    aria-label={`Delete ${task.title}`}
+                    onClick={() =>
+                      props.onDelete({
+                        kind: 'task',
+                        id: task.id,
+                        name: task.title,
+                      })
+                    }
+                    type="button"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </article>
+              ))
+            ) : (
+              <MiniEmpty text="No tasks or reminders yet." />
+            )}
+          </div>
           <button
             className="full-button"
-            onClick={() => props.onGo('Expiry')}
+            onClick={props.onAddTask}
             type="button"
           >
-            View expiry tracker
+            <Plus size={16} /> Add reminder
           </button>
-        </aside>
-        <section className="panel inventory-panel">
+        </section>
+        <section className="panel dashboard-insights-card">
+          <PanelHeading
+            title="Household insights"
+            subtitle="Live signals from your data"
+            icon={<Lightbulb size={20} />}
+          />
+          <DashboardInsights
+            expiring={expiringSoon.length}
+            lowStock={lowStock.length}
+            monthSpend={monthSpend}
+            openShopping={openShopping.length}
+            budget={props.monthlyBudget}
+          />
+        </section>
+      </div>
+      <div className="dashboard-bottom-grid">
+        <section className="panel inventory-panel dashboard-recent-inventory">
           <PanelHeading
             title="Recent inventory"
             subtitle="Latest items in your household"
@@ -1201,28 +1395,191 @@ function DashboardView(props: SectionProps) {
             onEdit={props.onEditItem}
           />
         </section>
-        <aside className="panel">
+        <section className="panel dashboard-shopping-card">
           <PanelHeading
             title="Shopping list"
-            subtitle={`${props.shopping.filter((item) => !item.completed).length} items to buy`}
-            icon={<ShoppingBasket size={21} />}
+            subtitle={`${openShopping.length} items to buy`}
+            action="Open list"
+            onAction={() => props.onGo('Shopping list')}
           />
           <ShoppingRows
             compact
-            items={props.shopping.slice(0, 5)}
+            items={openShopping.slice(0, 4)}
             onDelete={props.onDelete}
             onToggle={props.onToggleShopping}
           />
-          <button
-            className="full-button"
-            onClick={() => props.onGo('Shopping list')}
-            type="button"
-          >
-            Open shopping list
-          </button>
-        </aside>
+        </section>
+        <section className="panel dashboard-purchases-card">
+          <PanelHeading
+            title="Recent purchases"
+            subtitle="Latest household purchases"
+            action="View all"
+            onAction={() => props.onGo('Purchases')}
+          />
+          <RecentPurchases purchases={props.purchases.slice(0, 5)} />
+        </section>
       </div>
-    </>
+    </div>
+  );
+}
+
+function MonthlySpendingChart({
+  rows,
+}: {
+  rows: Array<{ key: string; label: string; value: number }>;
+}) {
+  const max = Math.max(...rows.map((row) => row.value), 1);
+  return (
+    <div className="monthly-chart" aria-label="Monthly spending chart">
+      {rows.map((row) => (
+        <div className="monthly-bar-column" key={row.key}>
+          <span>{row.value ? sar(row.value) : '—'}</span>
+          <i
+            style={{
+              height: `${Math.max((row.value / max) * 100, row.value ? 8 : 2)}%`,
+            }}
+          />
+          <small>{row.label}</small>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const donutColors = [
+  '#34c18a',
+  '#4f91dc',
+  '#f0b94c',
+  '#ef6f7c',
+  '#8c78df',
+  '#39b8bb',
+];
+
+function SpendingDonut({
+  rows,
+  total,
+}: {
+  rows: [string, number][];
+  total: number;
+}) {
+  if (!rows.length)
+    return <MiniEmpty text="Add an expense to see category spending." />;
+  const stops = rows.reduce(
+    (result, row, index) => {
+      const next = result.cursor + (row[1] / total) * 100;
+      return {
+        cursor: next,
+        values: [
+          ...result.values,
+          `${donutColors[index % donutColors.length]} ${result.cursor}% ${next}%`,
+        ],
+      };
+    },
+    { cursor: 0, values: [] as string[] },
+  ).values;
+  return (
+    <div className="donut-layout">
+      <div
+        className="donut-chart"
+        style={{ background: `conic-gradient(${stops.join(',')})` }}
+      >
+        <span>
+          <strong>{sar(total)}</strong>
+          <small>Total spent</small>
+        </span>
+      </div>
+      <div className="donut-legend">
+        {rows.slice(0, 6).map(([name, value], index) => (
+          <div key={name}>
+            <i
+              style={{ background: donutColors[index % donutColors.length] }}
+            />
+            <span>{name}</span>
+            <strong>{Math.round((value / total) * 100)}%</strong>
+            <small>{sar(value)}</small>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DashboardInsights({
+  lowStock,
+  expiring,
+  monthSpend,
+  budget,
+  openShopping,
+}: {
+  lowStock: number;
+  expiring: number;
+  monthSpend: number;
+  budget: number;
+  openShopping: number;
+}) {
+  const budgetUsed = budget ? Math.round((monthSpend / budget) * 100) : 0;
+  const insights = [
+    {
+      tone: 'warning',
+      badge: lowStock ? 'LOW STOCK' : 'STOCK',
+      title: lowStock
+        ? `${lowStock} items are running low`
+        : 'Stock levels look healthy',
+      text: lowStock
+        ? 'Consider restocking soon.'
+        : 'No low-stock items need action.',
+    },
+    {
+      tone: 'info',
+      badge: 'EXPIRY',
+      title: expiring
+        ? `${expiring} items expire soon`
+        : 'No urgent expiry alerts',
+      text: expiring
+        ? 'Plan to use these items this week.'
+        : 'Nothing expires in the next 7 days.',
+    },
+    {
+      tone: 'good',
+      badge: 'BUDGET',
+      title:
+        budgetUsed <= 100
+          ? `${budgetUsed}% of monthly budget used`
+          : 'Monthly budget exceeded',
+      text: `${openShopping} shopping items are still open.`,
+    },
+  ];
+  return (
+    <div className="insight-list">
+      {insights.map((item) => (
+        <article key={item.badge}>
+          <em className={item.tone}>{item.badge}</em>
+          <span>
+            <strong>{item.title}</strong>
+            <small>{item.text}</small>
+          </span>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function RecentPurchases({ purchases }: { purchases: Purchase[] }) {
+  if (!purchases.length) return <MiniEmpty text="No purchases recorded yet." />;
+  return (
+    <div className="recent-purchases-list">
+      {purchases.map((purchase) => (
+        <article key={purchase.id}>
+          <span>
+            <ReceiptText size={15} />
+            <strong>{purchase.itemName}</strong>
+          </span>
+          <b>{sar(purchase.totalPrice)}</b>
+          <small>{dayMonthShort(purchase.purchasedAt)}</small>
+          <em>{purchase.store || 'Store not set'}</em>
+        </article>
+      ))}
+    </div>
   );
 }
 
@@ -2642,6 +2999,55 @@ type IngredientDraft = {
   estimatedPrice: string;
 };
 
+function TaskDialog({
+  onClose,
+  onSubmit,
+}: {
+  onClose: () => void;
+  onSubmit: (event: SyntheticEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <div className="dialog-overlay">
+      <dialog
+        aria-labelledby="task-dialog-title"
+        className="inventory-dialog"
+        open
+      >
+        <button
+          aria-label="Close reminder dialog"
+          className="dialog-close"
+          onClick={onClose}
+          type="button"
+        >
+          <X size={17} />
+        </button>
+        <header className="dialog-header">
+          <h2 id="task-dialog-title">Add reminder</h2>
+          <p>Keep a household task visible on your dashboard.</p>
+        </header>
+        <form className="dialog-form" onSubmit={onSubmit}>
+          <label htmlFor="task-title">
+            Task
+            <input
+              id="task-title"
+              name="title"
+              placeholder="e.g. Clean the fridge"
+              required
+            />
+          </label>
+          <label htmlFor="task-due-date">
+            Due date <span>(optional)</span>
+            <input id="task-due-date" name="dueDate" type="date" />
+          </label>
+          <button className="primary-button dialog-submit" type="submit">
+            Add reminder
+          </button>
+        </form>
+      </dialog>
+    </div>
+  );
+}
+
 function MealDialog({
   editingMeal,
   defaultDate,
@@ -3407,6 +3813,31 @@ function addDaysIso(value: string, days: number) {
   const date = new Date(value + 'T12:00:00');
   date.setDate(date.getDate() + days);
   return localIso(date);
+}
+
+function lastSixMonths() {
+  const current = new Date(todayIso() + 'T12:00:00');
+  return Array.from({ length: 6 }, (_, index) => {
+    const date = new Date(
+      current.getFullYear(),
+      current.getMonth() - (5 - index),
+      1,
+      12,
+    );
+    return {
+      key: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
+      label: new Intl.DateTimeFormat('en-US', { month: 'short' }).format(date),
+    };
+  });
+}
+
+function compareTasks(a: HouseholdTask, b: HouseholdTask) {
+  if (a.completed !== b.completed)
+    return Number(a.completed) - Number(b.completed);
+  if (!a.dueDate && !b.dueDate) return a.createdAt.localeCompare(b.createdAt);
+  if (!a.dueDate) return 1;
+  if (!b.dueDate) return -1;
+  return a.dueDate.localeCompare(b.dueDate);
 }
 
 function startOfWeekIso(value: string) {
