@@ -1,12 +1,16 @@
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { getDb } from '@/db';
 import { shoppingItems } from '@/db/schema';
+import { requireApiContext } from '@/lib/auth';
 import { canonicalProductName } from '@/lib/products';
 
-export async function GET() {
+export async function GET(request: Request) {
+  const context = await requireApiContext(request);
+  if (context instanceof Response) return context;
   const rows = await getDb()
     .select()
     .from(shoppingItems)
+    .where(eq(shoppingItems.householdId, context.household.id))
     .orderBy(
       sql`${shoppingItems.scheduledDate} IS NULL`,
       asc(shoppingItems.scheduledDate),
@@ -16,8 +20,10 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const context = await requireApiContext(request, 'write');
+  if (context instanceof Response) return context;
   const body = (await request.json()) as Record<string, unknown>;
-  const name = await canonicalProductName(body.name);
+  const name = await canonicalProductName(body.name, context.household.id);
   const quantity = Number(body.quantity ?? 1);
   const unit = textField(body.unit) || 'pcs';
   const estimatedPrice =
@@ -42,6 +48,7 @@ export async function POST(request: Request) {
     .from(shoppingItems)
     .where(
       and(
+        eq(shoppingItems.householdId, context.household.id),
         eq(shoppingItems.completed, false),
         eq(shoppingItems.unit, unit),
         eq(sql`lower(trim(${shoppingItems.name}))`, name.toLowerCase()),
@@ -53,6 +60,7 @@ export async function POST(request: Request) {
   const [item] = await db
     .insert(shoppingItems)
     .values({
+      householdId: context.household.id,
       name,
       quantity,
       unit,
@@ -64,6 +72,8 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
+  const context = await requireApiContext(request, 'write');
+  if (context instanceof Response) return context;
   const body = (await request.json()) as Record<string, unknown>;
   const id = Number(body.id);
   if (!Number.isInteger(id))
@@ -72,7 +82,7 @@ export async function PATCH(request: Request) {
       { status: 400 },
     );
   const completed = Boolean(body.completed);
-  const name = await canonicalProductName(body.name);
+  const name = await canonicalProductName(body.name, context.household.id);
   const quantity = Number(body.quantity);
   const unit = textField(body.unit);
   const estimatedPrice =
@@ -106,7 +116,12 @@ export async function PATCH(request: Request) {
           }
         : { completed },
     )
-    .where(eq(shoppingItems.id, id))
+    .where(
+      and(
+        eq(shoppingItems.id, id),
+        eq(shoppingItems.householdId, context.household.id),
+      ),
+    )
     .returning();
   if (!item)
     return Response.json({ error: 'Item not found.' }, { status: 404 });
@@ -118,6 +133,8 @@ function textField(value: unknown) {
 }
 
 export async function DELETE(request: Request) {
+  const context = await requireApiContext(request, 'write');
+  if (context instanceof Response) return context;
   const id = Number(new URL(request.url).searchParams.get('id'));
   if (!Number.isInteger(id))
     return Response.json(
@@ -126,7 +143,12 @@ export async function DELETE(request: Request) {
     );
   const [item] = await getDb()
     .delete(shoppingItems)
-    .where(eq(shoppingItems.id, id))
+    .where(
+      and(
+        eq(shoppingItems.id, id),
+        eq(shoppingItems.householdId, context.household.id),
+      ),
+    )
     .returning();
   if (!item)
     return Response.json({ error: 'Item not found.' }, { status: 404 });

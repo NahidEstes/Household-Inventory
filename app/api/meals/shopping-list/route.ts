@@ -6,8 +6,11 @@ import {
   mealPlans,
   shoppingItems,
 } from '@/db/schema';
+import { requireApiContext } from '@/lib/auth';
 
 export async function POST(request: Request) {
+  const context = await requireApiContext(request, 'write');
+  if (context instanceof Response) return context;
   const body = (await request.json()) as Record<string, unknown>;
   const weekStart = textField(body.weekStart);
   const weekEnd = textField(body.weekEnd);
@@ -29,11 +32,26 @@ export async function POST(request: Request) {
         and(
           gte(mealPlans.plannedDate, weekStart),
           lte(mealPlans.plannedDate, weekEnd),
+          eq(mealPlans.householdId, context.household.id),
         ),
       ),
-    db.select().from(mealIngredients),
-    db.select().from(inventoryItems),
-    db.select().from(shoppingItems).where(eq(shoppingItems.completed, false)),
+    db
+      .select()
+      .from(mealIngredients)
+      .where(eq(mealIngredients.householdId, context.household.id)),
+    db
+      .select()
+      .from(inventoryItems)
+      .where(eq(inventoryItems.householdId, context.household.id)),
+    db
+      .select()
+      .from(shoppingItems)
+      .where(
+        and(
+          eq(shoppingItems.householdId, context.household.id),
+          eq(shoppingItems.completed, false),
+        ),
+      ),
   ]);
   const mealDates = new Map(meals.map((meal) => [meal.id, meal.plannedDate]));
   const stock = new Map(inventory.map((item) => [item.id, item]));
@@ -88,9 +106,10 @@ export async function POST(request: Request) {
       rows.map((row) =>
         binding
           .prepare(
-            'INSERT INTO shopping_items (name, quantity, unit, estimated_price, scheduled_date, completed) VALUES (?, ?, ?, ?, ?, 0)',
+            'INSERT INTO shopping_items (household_id, name, quantity, unit, estimated_price, scheduled_date, completed) VALUES (?, ?, ?, ?, ?, ?, 0)',
           )
           .bind(
+            context.household.id,
             row.name,
             row.quantity,
             row.unit,

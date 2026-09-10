@@ -8,8 +8,12 @@
   "scripts": {
     "dev": "vinext dev",
     "build": "vinext build",
+    "build:cloudflare": "vinext build",
+    "deploy:cloudflare": "npm run build:cloudflare && wrangler deploy --config wrangler.jsonc",
+    "db:migrate:cloudflare": "wrangler d1 migrations apply DB --remote --config wrangler.jsonc",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "format": "oxfmt",
     "db:generate": "drizzle-kit generate"
   },

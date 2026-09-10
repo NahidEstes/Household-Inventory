@@ -6,6 +6,7 @@ import { type KeyboardEvent, useEffect, useId, useRef, useState } from 'react';
 export type ProductSuggestion = {
   inventoryItemId: number;
   name: string;
+  brand: string | null;
   category: string;
   unit: string;
   location: string;
@@ -145,7 +146,7 @@ export function ProductNameAutocomplete({
               <button
                 className={activeIndex === index ? 'active' : ''}
                 id={`${listId}-${index}`}
-                key={product.name.toLowerCase()}
+                key={`${product.name.toLowerCase()}|${product.brand?.toLowerCase() ?? ''}`}
                 onMouseDown={(event) => event.preventDefault()}
                 onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => choose(product)}
@@ -155,6 +156,7 @@ export function ProductNameAutocomplete({
                 <span>
                   <strong>{product.name}</strong>
                   <small>
+                    {product.brand ? `${product.brand} · ` : ''}
                     {product.category} · {product.unit} · {product.location}
                   </small>
                 </span>

@@ -1,21 +1,37 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { getDb } from '@/db';
 import { expenses, inventoryItems, purchases, stockChanges } from '@/db/schema';
+import { requireApiContext } from '@/lib/auth';
+import { canonicalBrandName } from '@/lib/brands';
 import { canonicalCategoryName } from '@/lib/categories';
 import { canonicalProductName } from '@/lib/products';
+import { normalizeName, recordId } from '@/lib/security-core';
 
-export async function GET() {
+export async function GET(request: Request) {
+  const context = await requireApiContext(request);
+  if (context instanceof Response) return context;
   const rows = await getDb()
     .select()
     .from(purchases)
+    .where(eq(purchases.householdId, context.household.id))
     .orderBy(desc(purchases.purchasedAt), desc(purchases.createdAt));
   return Response.json(rows);
 }
 
 export async function POST(request: Request) {
+  const context = await requireApiContext(request, 'write');
+  if (context instanceof Response) return context;
   const body = (await request.json()) as Record<string, unknown>;
-  const itemName = await canonicalProductName(body.itemName);
-  const category = await canonicalCategoryName(body.category);
+  const brand = await canonicalBrandName(body.brand, context.household.id);
+  const itemName = await canonicalProductName(
+    body.itemName,
+    context.household.id,
+    brand.name,
+  );
+  const category = await canonicalCategoryName(
+    body.category,
+    context.household.id,
+  );
   const unit = textField(body.unit);
   const location = textField(body.location);
   const specificSpot = textField(body.specificSpot);
@@ -24,49 +40,88 @@ export async function POST(request: Request) {
   const expiryDate = textField(body.expiryDate);
   const quantity = Number(body.quantity);
   const totalPrice = Number(body.totalPrice);
-
   if (
     !itemName ||
     !category ||
     !unit ||
     !location ||
-    !purchasedAt ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(purchasedAt) ||
+    (expiryDate && !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) ||
     !Number.isFinite(quantity) ||
     quantity <= 0 ||
     !Number.isFinite(totalPrice) ||
     totalPrice <= 0
-  ) {
+  )
     return Response.json(
       { error: 'Please provide valid purchase details.' },
       { status: 400 },
     );
-  }
 
-  const inventoryItemId = recordId();
+  const db = getDb();
+  const normalizedName = normalizeName(itemName);
+  const [existingBatch] = await db
+    .select()
+    .from(inventoryItems)
+    .where(
+      and(
+        eq(inventoryItems.householdId, context.household.id),
+        eq(inventoryItems.normalizedName, normalizedName),
+        sql`COALESCE(${inventoryItems.normalizedBrand}, '') = ${brand.normalizedName ?? ''}`,
+        eq(inventoryItems.unit, unit),
+        eq(inventoryItems.location, location),
+        sql`COALESCE(${inventoryItems.specificSpot}, '') = ${specificSpot}`,
+        sql`COALESCE(${inventoryItems.expiryDate}, '') = ${expiryDate}`,
+      ),
+    )
+    .limit(1);
+  const inventoryItemId = existingBatch?.id ?? recordId();
+  const quantityBefore = existingBatch?.quantity ?? 0;
+  const quantityAfter = quantityBefore + quantity;
   const expenseId = recordId();
   const purchaseId = recordId();
-  const db = getDb();
+  const inventoryWrite = existingBatch
+    ? db
+        .update(inventoryItems)
+        .set({
+          quantity: quantityAfter,
+          category,
+          name: itemName,
+          brand: brand.name,
+        })
+        .where(
+          and(
+            eq(inventoryItems.id, inventoryItemId),
+            eq(inventoryItems.householdId, context.household.id),
+          ),
+        )
+        .returning()
+    : db
+        .insert(inventoryItems)
+        .values({
+          id: inventoryItemId,
+          householdId: context.household.id,
+          name: itemName,
+          normalizedName,
+          brand: brand.name,
+          normalizedBrand: brand.normalizedName,
+          category,
+          quantity,
+          unit,
+          location,
+          specificSpot: specificSpot || null,
+          expiryDate: expiryDate || null,
+        })
+        .returning();
   const [inventoryRows, expenseRows, purchaseRows] = await db.batch([
-    db
-      .insert(inventoryItems)
-      .values({
-        id: inventoryItemId,
-        name: itemName,
-        category,
-        quantity,
-        unit,
-        location,
-        specificSpot: specificSpot || null,
-        expiryDate: expiryDate || null,
-      })
-      .returning(),
+    inventoryWrite,
     db
       .insert(expenses)
       .values({
         id: expenseId,
+        householdId: context.household.id,
         amount: totalPrice,
         category: category === 'Household' ? 'Household' : 'Groceries',
-        note: `${itemName}${store ? ` · ${store}` : ''}`,
+        note: `${itemName}${brand.name ? ` · ${brand.name}` : ''}${store ? ` · ${store}` : ''}`,
         spentAt: purchasedAt,
       })
       .returning(),
@@ -74,7 +129,11 @@ export async function POST(request: Request) {
       .insert(purchases)
       .values({
         id: purchaseId,
+        householdId: context.household.id,
         itemName,
+        normalizedName,
+        brand: brand.name,
+        normalizedBrand: brand.normalizedName,
         category,
         quantity,
         unit,
@@ -83,24 +142,28 @@ export async function POST(request: Request) {
         expiryDate: expiryDate || null,
         store: store || null,
         location,
+        specificSpot: specificSpot || null,
         inventoryItemId,
         expenseId,
       })
       .returning(),
     db.insert(stockChanges).values({
       id: recordId(),
+      householdId: context.household.id,
       inventoryItemId,
       itemName,
+      normalizedName,
+      brand: brand.name,
+      normalizedBrand: brand.normalizedName,
       unit,
       quantityChange: quantity,
-      quantityBefore: 0,
-      quantityAfter: quantity,
+      quantityBefore,
+      quantityAfter,
       reason: 'Purchase',
       note: store || null,
       createdAt: new Date().toISOString(),
     }),
   ]);
-
   return Response.json(
     {
       purchase: purchaseRows[0],
@@ -112,41 +175,90 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const context = await requireApiContext(request, 'write');
+  if (context instanceof Response) return context;
   const id = Number(new URL(request.url).searchParams.get('id'));
   if (!Number.isInteger(id))
     return Response.json(
       { error: 'A valid purchase ID is required.' },
       { status: 400 },
     );
-
   const db = getDb();
   const [purchase] = await db
     .select()
     .from(purchases)
-    .where(eq(purchases.id, id))
+    .where(
+      and(
+        eq(purchases.id, id),
+        eq(purchases.householdId, context.household.id),
+      ),
+    )
     .limit(1);
   if (!purchase)
     return Response.json({ error: 'Purchase not found.' }, { status: 404 });
-
-  await db.batch([
-    db.delete(purchases).where(eq(purchases.id, id)),
-    db
-      .delete(stockChanges)
-      .where(eq(stockChanges.inventoryItemId, purchase.inventoryItemId)),
-    db
-      .delete(inventoryItems)
-      .where(eq(inventoryItems.id, purchase.inventoryItemId)),
-    db.delete(expenses).where(eq(expenses.id, purchase.expenseId)),
-  ]);
+  const [batch] = await db
+    .select()
+    .from(inventoryItems)
+    .where(
+      and(
+        eq(inventoryItems.id, purchase.inventoryItemId),
+        eq(inventoryItems.householdId, context.household.id),
+      ),
+    )
+    .limit(1);
+  const removable = Math.min(batch?.quantity ?? 0, purchase.quantity);
+  const quantityAfter = Math.max(0, (batch?.quantity ?? 0) - removable);
+  const deletePurchase = db
+    .delete(purchases)
+    .where(
+      and(
+        eq(purchases.id, id),
+        eq(purchases.householdId, context.household.id),
+      ),
+    );
+  const deleteExpense = db
+    .delete(expenses)
+    .where(
+      and(
+        eq(expenses.id, purchase.expenseId),
+        eq(expenses.householdId, context.household.id),
+      ),
+    );
+  if (batch && removable > 0) {
+    await db.batch([
+      deletePurchase,
+      deleteExpense,
+      db
+        .update(inventoryItems)
+        .set({ quantity: quantityAfter })
+        .where(
+          and(
+            eq(inventoryItems.id, batch.id),
+            eq(inventoryItems.householdId, context.household.id),
+          ),
+        ),
+      db.insert(stockChanges).values({
+        id: recordId(),
+        householdId: context.household.id,
+        inventoryItemId: batch.id,
+        itemName: batch.name,
+        normalizedName: batch.normalizedName,
+        brand: batch.brand,
+        normalizedBrand: batch.normalizedBrand,
+        unit: batch.unit,
+        quantityChange: -removable,
+        quantityBefore: batch.quantity,
+        quantityAfter,
+        reason: 'Purchase deleted',
+        createdAt: new Date().toISOString(),
+      }),
+    ]);
+  } else await db.batch([deletePurchase, deleteExpense]);
   return Response.json({
     id,
     inventoryItemId: purchase.inventoryItemId,
     expenseId: purchase.expenseId,
   });
-}
-
-function recordId() {
-  return crypto.getRandomValues(new Uint32Array(1))[0] & 0x7fffffff;
 }
 
 function textField(value: unknown) {

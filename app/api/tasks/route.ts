@@ -1,11 +1,15 @@
-import { asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { getDb } from '@/db';
 import { householdTasks } from '@/db/schema';
+import { requireApiContext } from '@/lib/auth';
 
-export async function GET() {
+export async function GET(request: Request) {
+  const context = await requireApiContext(request);
+  if (context instanceof Response) return context;
   const rows = await getDb()
     .select()
     .from(householdTasks)
+    .where(eq(householdTasks.householdId, context.household.id))
     .orderBy(
       asc(householdTasks.completed),
       sql`${householdTasks.dueDate} IS NULL`,
@@ -16,6 +20,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const context = await requireApiContext(request, 'write');
+  if (context instanceof Response) return context;
   const body = (await request.json()) as Record<string, unknown>;
   const title = textField(body.title);
   const dueDate = textField(body.dueDate) || null;
@@ -26,12 +32,14 @@ export async function POST(request: Request) {
     );
   const [task] = await getDb()
     .insert(householdTasks)
-    .values({ title, dueDate })
+    .values({ householdId: context.household.id, title, dueDate })
     .returning();
   return Response.json(task, { status: 201 });
 }
 
 export async function PATCH(request: Request) {
+  const context = await requireApiContext(request, 'write');
+  if (context instanceof Response) return context;
   const body = (await request.json()) as Record<string, unknown>;
   const id = Number(body.id);
   if (!Number.isInteger(id))
@@ -42,7 +50,12 @@ export async function PATCH(request: Request) {
   const [task] = await getDb()
     .update(householdTasks)
     .set({ completed: Boolean(body.completed) })
-    .where(eq(householdTasks.id, id))
+    .where(
+      and(
+        eq(householdTasks.id, id),
+        eq(householdTasks.householdId, context.household.id),
+      ),
+    )
     .returning();
   if (!task)
     return Response.json({ error: 'Task not found.' }, { status: 404 });
@@ -50,6 +63,8 @@ export async function PATCH(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const context = await requireApiContext(request, 'write');
+  if (context instanceof Response) return context;
   const id = Number(new URL(request.url).searchParams.get('id'));
   if (!Number.isInteger(id))
     return Response.json(
@@ -58,7 +73,12 @@ export async function DELETE(request: Request) {
     );
   const [task] = await getDb()
     .delete(householdTasks)
-    .where(eq(householdTasks.id, id))
+    .where(
+      and(
+        eq(householdTasks.id, id),
+        eq(householdTasks.householdId, context.household.id),
+      ),
+    )
     .returning();
   if (!task)
     return Response.json({ error: 'Task not found.' }, { status: 404 });

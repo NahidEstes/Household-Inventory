@@ -1,16 +1,22 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { getDb } from '@/db';
 import { expenses } from '@/db/schema';
+import { requireApiContext } from '@/lib/auth';
 
-export async function GET() {
+export async function GET(request: Request) {
+  const context = await requireApiContext(request);
+  if (context instanceof Response) return context;
   const rows = await getDb()
     .select()
     .from(expenses)
+    .where(eq(expenses.householdId, context.household.id))
     .orderBy(desc(expenses.spentAt));
   return Response.json(rows);
 }
 
 export async function POST(request: Request) {
+  const context = await requireApiContext(request, 'write');
+  if (context instanceof Response) return context;
   const body = (await request.json()) as Record<string, unknown>;
   const amount = Number(body.amount);
   const category = textField(body.category);
@@ -24,6 +30,7 @@ export async function POST(request: Request) {
   const [expense] = await getDb()
     .insert(expenses)
     .values({
+      householdId: context.household.id,
       amount,
       category,
       spentAt,
@@ -34,6 +41,8 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const context = await requireApiContext(request, 'write');
+  if (context instanceof Response) return context;
   const id = Number(new URL(request.url).searchParams.get('id'));
   if (!Number.isInteger(id))
     return Response.json(
@@ -42,7 +51,9 @@ export async function DELETE(request: Request) {
     );
   const [expense] = await getDb()
     .delete(expenses)
-    .where(eq(expenses.id, id))
+    .where(
+      and(eq(expenses.id, id), eq(expenses.householdId, context.household.id)),
+    )
     .returning();
   if (!expense)
     return Response.json({ error: 'Expense not found.' }, { status: 404 });

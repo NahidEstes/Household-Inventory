@@ -1,10 +1,14 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { getDb } from '@/db';
 import { inventoryItems, stockChanges } from '@/db/schema';
+import { requireApiContext } from '@/lib/auth';
+import { normalizeName, recordId } from '@/lib/security-core';
 
 const removalReasons = new Set(['Used', 'Wasted', 'Other']);
 
 export async function GET(request: Request) {
+  const context = await requireApiContext(request);
+  if (context instanceof Response) return context;
   const inventoryItemId = Number(
     new URL(request.url).searchParams.get('itemId'),
   );
@@ -17,12 +21,19 @@ export async function GET(request: Request) {
   const rows = await getDb()
     .select()
     .from(stockChanges)
-    .where(eq(stockChanges.inventoryItemId, inventoryItemId))
+    .where(
+      and(
+        eq(stockChanges.inventoryItemId, inventoryItemId),
+        eq(stockChanges.householdId, context.household.id),
+      ),
+    )
     .orderBy(desc(stockChanges.createdAt), desc(stockChanges.id));
   return Response.json(rows);
 }
 
 export async function POST(request: Request) {
+  const context = await requireApiContext(request, 'write');
+  if (context instanceof Response) return context;
   const body = (await request.json()) as Record<string, unknown>;
   const inventoryItemId = Number(body.inventoryItemId);
   const quantity = Number(body.quantity);
@@ -43,7 +54,12 @@ export async function POST(request: Request) {
   const [current] = await db
     .select()
     .from(inventoryItems)
-    .where(eq(inventoryItems.id, inventoryItemId))
+    .where(
+      and(
+        eq(inventoryItems.id, inventoryItemId),
+        eq(inventoryItems.householdId, context.household.id),
+      ),
+    )
     .limit(1);
   if (!current)
     return Response.json(
@@ -65,14 +81,23 @@ export async function POST(request: Request) {
     db
       .update(inventoryItems)
       .set({ quantity: quantityAfter })
-      .where(eq(inventoryItems.id, inventoryItemId))
+      .where(
+        and(
+          eq(inventoryItems.id, inventoryItemId),
+          eq(inventoryItems.householdId, context.household.id),
+        ),
+      )
       .returning(),
     db
       .insert(stockChanges)
       .values({
         id: historyId,
+        householdId: context.household.id,
         inventoryItemId,
         itemName: current.name,
+        normalizedName: current.normalizedName ?? normalizeName(current.name),
+        brand: current.brand,
+        normalizedBrand: current.normalizedBrand,
         unit: current.unit,
         quantityChange: -quantity,
         quantityBefore: current.quantity,
@@ -85,10 +110,6 @@ export async function POST(request: Request) {
   ]);
 
   return Response.json({ item: updatedRows[0], history: historyRows[0] });
-}
-
-function recordId() {
-  return crypto.getRandomValues(new Uint32Array(1))[0] & 0x7fffffff;
 }
 
 function textField(value: unknown) {

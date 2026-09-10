@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { getDb } from '@/db';
 import { productCategories } from '@/db/schema';
 
@@ -10,13 +10,21 @@ export function normalizeCategoryName(value: unknown) {
   return cleanCategoryName(value).toLocaleLowerCase('en-US');
 }
 
-export async function canonicalCategoryName(value: unknown) {
+export async function canonicalCategoryName(
+  value: unknown,
+  householdId: number,
+) {
   const normalized = normalizeCategoryName(value);
   if (!normalized) return '';
   const [category] = await getDb()
     .select({ name: productCategories.name })
     .from(productCategories)
-    .where(eq(productCategories.normalizedName, normalized))
+    .where(
+      and(
+        eq(productCategories.householdId, householdId),
+        eq(productCategories.normalizedName, normalized),
+      ),
+    )
     .limit(1);
   return category?.name ?? '';
 }

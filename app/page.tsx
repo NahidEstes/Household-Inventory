@@ -26,6 +26,7 @@ import {
   ReceiptText,
   Search,
   Settings,
+  ShieldCheck,
   ShoppingBasket,
   Sun,
   Tags,
@@ -46,6 +47,12 @@ import {
   ProductNameAutocomplete,
   type ProductSuggestion,
 } from '@/components/product-name-autocomplete';
+import { BrandAutocomplete } from '@/components/brand-autocomplete';
+import {
+  AccountSettings,
+  type AuthState,
+  HouseholdSwitcher,
+} from '@/components/account-settings';
 
 type Section =
   | 'Dashboard'
@@ -63,6 +70,7 @@ type Section =
 type InventoryItem = {
   id: number;
   name: string;
+  brand: string | null;
   category: string;
   quantity: number;
   unit: string;
@@ -82,6 +90,7 @@ type Expense = {
 type Purchase = {
   id: number;
   itemName: string;
+  brand: string | null;
   category: string;
   quantity: number;
   unit: string;
@@ -108,6 +117,7 @@ type StockChange = {
   id: number;
   inventoryItemId: number;
   itemName: string;
+  brand: string | null;
   unit: string;
   quantityChange: number;
   quantityBefore: number;
@@ -261,6 +271,8 @@ const sectionCopy: Record<
 
 export default function HomeInventory() {
   const [dark, setDark] = useState(false);
+  const [auth, setAuth] = useState<AuthState | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [activeSection, setActiveSection] = useState<Section>('Dashboard');
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -323,6 +335,10 @@ export default function HomeInventory() {
           '/api/categories',
         ].map((url) => fetch(url)),
       );
+      if (responses.some((response) => response.status === 401)) {
+        window.location.replace('/login');
+        return;
+      }
       if (responses.some((response) => !response.ok))
         throw new Error('Data request failed');
       const [
@@ -350,6 +366,16 @@ export default function HomeInventory() {
     }
   }, []);
 
+  const refreshAuth = useCallback(async () => {
+    const response = await fetch('/api/auth/me');
+    if (response.status === 401) {
+      window.location.replace('/login');
+      return;
+    }
+    if (!response.ok) throw new Error('Could not load account');
+    setAuth((await response.json()) as AuthState);
+  }, []);
+
   useEffect(() => {
     const saved = localStorage.getItem('home-inventory-theme');
     const nextDark = saved
@@ -361,8 +387,22 @@ export default function HomeInventory() {
   }, []);
 
   useEffect(() => {
-    queueMicrotask(() => void loadData());
-  }, [loadData]);
+    queueMicrotask(() => {
+      void refreshAuth()
+        .then(loadData)
+        .catch(() =>
+          setError('We could not verify your account. Please try again.'),
+        )
+        .finally(() => setAuthLoading(false));
+    });
+  }, [loadData, refreshAuth]);
+
+  async function refreshWorkspace() {
+    setQuery('');
+    setCategoryFilter('All categories');
+    await refreshAuth();
+    await loadData();
+  }
 
   useEffect(() => {
     const context =
@@ -491,7 +531,7 @@ export default function HomeInventory() {
     () =>
       inventory.filter((item) => {
         const matchesQuery =
-          `${item.name} ${item.category} ${item.location} ${item.specificSpot ?? ''}`
+          `${item.name} ${item.brand ?? ''} ${item.category} ${item.location} ${item.specificSpot ?? ''}`
             .toLowerCase()
             .includes(query.toLowerCase());
         return (
@@ -514,7 +554,7 @@ export default function HomeInventory() {
   const filteredPurchases = useMemo(
     () =>
       purchases.filter((item) =>
-        `${item.itemName} ${item.category} ${item.store ?? ''}`
+        `${item.itemName} ${item.brand ?? ''} ${item.category} ${item.store ?? ''}`
           .toLowerCase()
           .includes(query.toLowerCase()),
       ),
@@ -614,7 +654,9 @@ export default function HomeInventory() {
     setInventory((rows) =>
       editingItem
         ? rows.map((row) => (row.id === item.id ? item : row))
-        : [item, ...rows],
+        : rows.some((row) => row.id === item.id)
+          ? rows.map((row) => (row.id === item.id ? item : row))
+          : [item, ...rows],
     );
     setItemDialogOpen(false);
     showNotice(
@@ -664,7 +706,13 @@ export default function HomeInventory() {
       expense: Expense;
     };
     setPurchases((rows) => [result.purchase, ...rows]);
-    setInventory((rows) => [result.inventoryItem, ...rows]);
+    setInventory((rows) =>
+      rows.some((row) => row.id === result.inventoryItem.id)
+        ? rows.map((row) =>
+            row.id === result.inventoryItem.id ? result.inventoryItem : row,
+          )
+        : [result.inventoryItem, ...rows],
+    );
     setExpenses((rows) => [result.expense, ...rows]);
     setPurchaseDialogOpen(false);
     showNotice(
@@ -897,10 +945,8 @@ export default function HomeInventory() {
       setTasks((rows) => rows.filter((row) => row.id !== deleteTarget.id));
     if (deleteTarget.kind === 'purchase') {
       setPurchases((rows) => rows.filter((row) => row.id !== deleteTarget.id));
-      setInventory((rows) =>
-        rows.filter((row) => row.id !== deleted.inventoryItemId),
-      );
       setExpenses((rows) => rows.filter((row) => row.id !== deleted.expenseId));
+      await loadData();
     }
     showNotice(`${deleteTarget.name} was deleted.`);
     setDeleteTarget(null);
@@ -999,6 +1045,16 @@ export default function HomeInventory() {
     showNotice('Household settings saved.');
   }
 
+  if (authLoading || !auth)
+    return (
+      <main className="auth-loading">
+        <span className="brand-mark">
+          <Home size={20} />
+        </span>
+        <p>Opening your household…</p>
+      </main>
+    );
+
   const copy = sectionCopy[activeSection];
   return (
     <main className="app-shell">
@@ -1036,9 +1092,11 @@ export default function HomeInventory() {
             <span>Settings</span>
           </button>
           <div className="profile-mini">
-            <span className="avatar">NH</span>
+            <span className="avatar">
+              {initials(auth.user.displayName || auth.user.email)}
+            </span>
             <span>
-              <strong>Nahid Hasan</strong>
+              <strong>{auth.user.displayName || auth.user.email}</strong>
               <small>{settings.householdName}</small>
             </span>
           </div>
@@ -1058,6 +1116,11 @@ export default function HomeInventory() {
             <kbd>⌘ K</kbd>
           </label>
           <div className="top-actions">
+            <HouseholdSwitcher
+              auth={auth}
+              onChanged={refreshWorkspace}
+              onNotice={showNotice}
+            />
             <button
               aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
               className="icon-button"
@@ -1091,6 +1154,7 @@ export default function HomeInventory() {
               <p>{copy.subtitle}</p>
             </div>
             <HeaderActions
+              readOnly={auth.household.role === 'viewer'}
               section={activeSection}
               onAddExpense={() => setExpenseDialogOpen(true)}
               onAddCategory={openNewCategory}
@@ -1116,6 +1180,12 @@ export default function HomeInventory() {
               </button>
             </div>
           )}
+          {auth.household.role === 'viewer' && (
+            <div className="read-only-banner">
+              <ShieldCheck size={16} /> Viewer access · changes are disabled for
+              this household.
+            </div>
+          )}
           {error && (
             <div className="error-banner">
               <span>{error}</span>
@@ -1129,6 +1199,7 @@ export default function HomeInventory() {
           ) : (
             <SectionContent
               activeSection={activeSection}
+              auth={auth}
               categoryFilter={categoryFilter}
               categoryRecords={filteredCategoryRecords}
               categories={categories}
@@ -1171,6 +1242,7 @@ export default function HomeInventory() {
               spentTotal={spentTotal}
               mealWeekStart={mealWeekStart}
               onMealWeekChange={setMealWeekStart}
+              onNotice={showNotice}
             />
           )}
         </div>
@@ -1285,6 +1357,7 @@ export default function HomeInventory() {
 
 function HeaderActions({
   section,
+  readOnly,
   onAddCategory,
   onAddMeal,
   onAddExpense,
@@ -1294,6 +1367,7 @@ function HeaderActions({
   onGenerateShopping,
 }: {
   section: Section;
+  readOnly: boolean;
   onAddCategory: () => void;
   onAddMeal: () => void;
   onAddExpense: () => void;
@@ -1302,6 +1376,7 @@ function HeaderActions({
   onScheduleShopping: () => void;
   onGenerateShopping: () => void;
 }) {
+  if (readOnly) return null;
   if (section === 'Meal planner')
     return (
       <div className="heading-actions">
@@ -1370,6 +1445,7 @@ function HeaderActions({
 
 type SectionProps = {
   activeSection: Section;
+  auth: AuthState;
   categoryFilter: string;
   categoryRecords: ProductCategory[];
   categories: string[];
@@ -1412,6 +1488,7 @@ type SectionProps = {
   spentTotal: number;
   mealWeekStart: string;
   onMealWeekChange: (date: string) => void;
+  onNotice: (message: string) => void;
 };
 
 function SectionContent(props: SectionProps) {
@@ -2089,7 +2166,10 @@ function RecentPurchases({ purchases }: { purchases: Purchase[] }) {
         <article key={purchase.id}>
           <span>
             <ReceiptText size={15} />
-            <strong>{purchase.itemName}</strong>
+            <strong>
+              {purchase.itemName}
+              {purchase.brand ? ` · ${purchase.brand}` : ''}
+            </strong>
           </span>
           <b>{sar(purchase.totalPrice)}</b>
           <small>{dayMonthShort(purchase.purchasedAt)}</small>
@@ -2109,7 +2189,10 @@ function PurchasesView(props: SectionProps) {
     ? purchaseTotal / props.purchases.length
     : 0;
   const pricedItems = new Set(
-    props.purchases.map((item) => item.itemName.toLowerCase()),
+    props.purchases.map(
+      (item) =>
+        `${item.itemName.toLowerCase()}|${(item.brand ?? '').toLowerCase()}`,
+    ),
   ).size;
   return (
     <>
@@ -2315,7 +2398,7 @@ function StorageView(props: SectionProps) {
   const filtered = props.inventory.filter((item) => {
     const status = itemStatus(item).label;
     const searchTarget =
-      `${item.name} ${item.location} ${item.specificSpot ?? ''}`.toLowerCase();
+      `${item.name} ${item.brand ?? ''} ${item.location} ${item.specificSpot ?? ''}`.toLowerCase();
     return (
       searchTarget.includes(storageSearch.toLowerCase()) &&
       (locationFilter === 'All locations' ||
@@ -2535,7 +2618,10 @@ function StorageTable({
                     </span>
                     <span>
                       <strong>{item.name}</strong>
-                      <small>{item.category}</small>
+                      <small>
+                        {item.brand ? `${item.brand} · ` : ''}
+                        {item.category}
+                      </small>
                     </span>
                   </span>
                 </td>
@@ -3242,6 +3328,8 @@ function ReportsView(props: SectionProps) {
         rows.findIndex(
           (item) =>
             item.itemName.toLowerCase() === purchase.itemName.toLowerCase() &&
+            (item.brand ?? '').toLowerCase() ===
+              (purchase.brand ?? '').toLowerCase() &&
             item.unit === purchase.unit,
         ) === index,
     )
@@ -3330,6 +3418,8 @@ function ReportsView(props: SectionProps) {
                   (item) =>
                     item.itemName.toLowerCase() ===
                       purchase.itemName.toLowerCase() &&
+                    (item.brand ?? '').toLowerCase() ===
+                      (purchase.brand ?? '').toLowerCase() &&
                     item.unit === purchase.unit,
                 );
               const unitPrice = purchase.totalPrice / purchase.quantity;
@@ -3345,7 +3435,10 @@ function ReportsView(props: SectionProps) {
                     {categoryIcons[purchase.category] ?? '📦'}
                   </span>
                   <div>
-                    <strong>{purchase.itemName}</strong>
+                    <strong>
+                      {purchase.itemName}
+                      {purchase.brand ? ` · ${purchase.brand}` : ''}
+                    </strong>
                     <small>
                       per {purchase.unit} · {purchase.store || 'Store not set'}
                     </small>
@@ -3374,68 +3467,80 @@ function ReportsView(props: SectionProps) {
 
 function SettingsView(props: SectionProps) {
   return (
-    <div className="settings-grid">
-      <form className="panel settings-form" onSubmit={props.onSaveSettings}>
-        <PanelHeading
-          title="Household details"
-          subtitle="Used across your dashboard and reports"
-        />
-        <label htmlFor="household-name">
-          Household name
-          <input
-            defaultValue={props.settings.householdName}
-            id="household-name"
-            name="householdName"
-            required
+    <>
+      <div className="settings-grid">
+        <form className="panel settings-form" onSubmit={props.onSaveSettings}>
+          <PanelHeading
+            title="Household details"
+            subtitle="Used across your dashboard and reports"
           />
-        </label>
-        <label htmlFor="monthly-budget">
-          Monthly budget (SAR)
-          <input
-            defaultValue={props.settings.monthlyBudget}
-            id="monthly-budget"
-            min="1"
-            name="monthlyBudget"
-            required
-            step="0.01"
-            type="number"
-          />
-        </label>
-        <label htmlFor="currency">
-          Currency
-          <input disabled id="currency" value="SAR — Saudi Riyal" />
-        </label>
-        <button className="primary-button" type="submit">
-          Save settings
-        </button>
-      </form>
-      <section className="panel settings-form">
-        <PanelHeading
-          title="Appearance"
-          subtitle="Theme is saved on this device"
-        />
-        <div className="theme-note">
-          <Sun size={20} />
-          <div>
-            <strong>Light & dark mode</strong>
-            <p>
-              Use the moon or sun button in the top bar to switch themes
-              instantly.
+          <label htmlFor="household-name">
+            Household name
+            <input
+              defaultValue={props.settings.householdName}
+              id="household-name"
+              name="householdName"
+              required
+            />
+          </label>
+          <label htmlFor="monthly-budget">
+            Monthly budget (SAR)
+            <input
+              defaultValue={props.settings.monthlyBudget}
+              id="monthly-budget"
+              min="1"
+              name="monthlyBudget"
+              required
+              step="0.01"
+              type="number"
+            />
+          </label>
+          <label htmlFor="currency">
+            Currency
+            <input disabled id="currency" value="SAR — Saudi Riyal" />
+          </label>
+          <button
+            className="primary-button"
+            disabled={props.auth.household.role !== 'owner'}
+            type="submit"
+          >
+            Save settings
+          </button>
+          {props.auth.household.role !== 'owner' && (
+            <p className="field-hint">
+              Only a household owner can change shared settings.
             </p>
+          )}
+        </form>
+        <section className="panel settings-form">
+          <PanelHeading
+            title="Appearance"
+            subtitle="Theme is saved on this device"
+          />
+          <div className="theme-note">
+            <Sun size={20} />
+            <div>
+              <strong>Light & dark mode</strong>
+              <p>
+                Use the moon or sun button in the top bar to switch themes
+                instantly.
+              </p>
+            </div>
           </div>
-        </div>
-        <div className="theme-preview-row">
-          <div className="theme-preview light">
-            <span />
-            <b>Light</b>
+          <div className="theme-preview-row">
+            <div className="theme-preview light">
+              <span />
+              <b>Light</b>
+            </div>
+            <div className="theme-preview dark-preview">
+              <span />
+              <b>Dark</b>
+            </div>
           </div>
-          <div className="theme-preview dark-preview">
-            <span />
-            <b>Dark</b>
-          </div>
-        </div>
-      </section>
-    </div>
+        </section>
+      </div>
+      <AccountSettings auth={props.auth} onNotice={props.onNotice} />
+    </>
   );
 }
 
@@ -3514,7 +3619,7 @@ function InventoryTable({
     return compact ? <MiniEmpty text="No inventory items yet." /> : null;
   const batches = items.reduce<Record<string, InventoryItem[]>>(
     (groups, item) => {
-      const key = `${item.name.toLowerCase()}|${item.unit}`;
+      const key = `${item.name.toLowerCase()}|${(item.brand ?? '').toLowerCase()}|${item.unit}`;
       (groups[key] ??= []).push(item);
       groups[key].sort((a, b) =>
         (a.expiryDate ?? '9999-12-31').localeCompare(
@@ -3542,7 +3647,9 @@ function InventoryTable({
           {items.map((item) => {
             const status = itemStatus(item);
             const batchGroup =
-              batches[`${item.name.toLowerCase()}|${item.unit}`];
+              batches[
+                `${item.name.toLowerCase()}|${(item.brand ?? '').toLowerCase()}|${item.unit}`
+              ];
             const batchNumber =
               batchGroup.findIndex((batch) => batch.id === item.id) + 1;
             return (
@@ -3555,6 +3662,7 @@ function InventoryTable({
                     <span>
                       <strong>{item.name}</strong>
                       <small>
+                        {item.brand ? `${item.brand} · ` : ''}
                         {item.category}
                         {batchGroup.length > 1 && (
                           <em className="batch-label">
@@ -3669,6 +3777,8 @@ function PurchaseTable({
                 (item) =>
                   item.itemName.toLowerCase() ===
                     purchase.itemName.toLowerCase() &&
+                  (item.brand ?? '').toLowerCase() ===
+                    (purchase.brand ?? '').toLowerCase() &&
                   item.unit === purchase.unit,
               );
             const previousUnitPrice = previous
@@ -3686,7 +3796,10 @@ function PurchaseTable({
                     </span>
                     <span>
                       <strong>{purchase.itemName}</strong>
-                      <small>{purchase.category}</small>
+                      <small>
+                        {purchase.brand ? `${purchase.brand} · ` : ''}
+                        {purchase.category}
+                      </small>
                     </span>
                   </span>
                 </td>
@@ -4301,6 +4414,15 @@ function formText(value: FormDataEntryValue | undefined) {
   return typeof value === 'string' ? value : '';
 }
 
+function initials(value: string) {
+  return value
+    .split(/\s+|@/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join('');
+}
+
 function ShoppingScheduleDialog({
   editingItem,
   defaultDate,
@@ -4450,7 +4572,10 @@ function RemoveStockDialog({
             {categoryIcons[item.category] ?? '📦'}
           </span>
           <span>
-            <strong>{item.name}</strong>
+            <strong>
+              {item.name}
+              {item.brand ? ` · ${item.brand}` : ''}
+            </strong>
             <small>
               Current quantity: {item.quantity} {item.unit}
             </small>
@@ -4552,7 +4677,9 @@ function StockHistoryDialog({
         <header className="dialog-header">
           <h2 id="stock-history-dialog-title">Stock history</h2>
           <p>
-            {item.name} · {item.quantity} {item.unit} currently available
+            {item.name}
+            {item.brand ? ` · ${item.brand}` : ''} · {item.quantity} {item.unit}{' '}
+            currently available
           </p>
         </header>
         {loading ? (
@@ -4715,6 +4842,7 @@ function ItemDialog({
   const [category, setCategory] = useState(
     editingItem?.category ?? categories[0]?.name ?? '',
   );
+  const [brand, setBrand] = useState(editingItem?.brand ?? '');
   const [unit, setUnit] = useState(editingItem?.unit ?? 'kg');
   const [location, setLocation] = useState(editingItem?.location ?? 'Fridge');
   const [specificSpot, setSpecificSpot] = useState(
@@ -4722,6 +4850,7 @@ function ItemDialog({
   );
 
   function applyProduct(product: ProductSuggestion) {
+    setBrand(product.brand ?? '');
     setCategory(product.category);
     setUnit(product.unit);
     setLocation(product.location);
@@ -4759,6 +4888,16 @@ function ItemDialog({
               onProductSelect={applyProduct}
               placeholder="e.g. Basmati rice"
               required
+            />
+          </div>
+          <div className="dialog-field">
+            <label htmlFor="item-brand">
+              Brand <span>(optional)</span>
+            </label>
+            <BrandAutocomplete
+              id="item-brand"
+              onValueChange={setBrand}
+              value={brand}
             />
           </div>
           <div className="form-grid">
@@ -4870,11 +5009,13 @@ function PurchaseDialog({
 }) {
   const today = new Date().toISOString().slice(0, 10);
   const [category, setCategory] = useState(categories[0]?.name ?? '');
+  const [brand, setBrand] = useState('');
   const [unit, setUnit] = useState('kg');
   const [location, setLocation] = useState('Fridge');
   const [specificSpot, setSpecificSpot] = useState('');
 
   function applyProduct(product: ProductSuggestion) {
+    setBrand(product.brand ?? '');
     setCategory(product.category);
     setUnit(product.unit);
     setLocation(product.location);
@@ -4909,6 +5050,16 @@ function PurchaseDialog({
               onProductSelect={applyProduct}
               placeholder="e.g. Basmati rice"
               required
+            />
+          </div>
+          <div className="dialog-field">
+            <label htmlFor="purchase-brand">
+              Brand <span>(optional)</span>
+            </label>
+            <BrandAutocomplete
+              id="purchase-brand"
+              onValueChange={setBrand}
+              value={brand}
             />
           </div>
           <div className="form-grid">

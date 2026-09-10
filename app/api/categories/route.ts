@@ -1,6 +1,7 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { getDb, getDbBinding } from '@/db';
 import { productCategories } from '@/db/schema';
+import { requireApiContext } from '@/lib/auth';
 import { cleanCategoryName, normalizeCategoryName } from '@/lib/categories';
 
 type CategoryRow = {
@@ -11,22 +12,27 @@ type CategoryRow = {
   itemCount: number;
 };
 
-export async function GET() {
+export async function GET(request: Request) {
+  const context = await requireApiContext(request);
+  if (context instanceof Response) return context;
   const binding = getDbBinding();
   await binding
     .prepare(
-      `INSERT OR IGNORE INTO product_categories (name, normalized_name)
-       SELECT MIN(trim(category)), lower(trim(category))
+      `INSERT OR IGNORE INTO product_categories (name, normalized_name, household_id)
+       SELECT MIN(trim(category)), lower(trim(category)), ?
        FROM inventory_items
-       WHERE trim(category) <> ''
+       WHERE household_id = ? AND trim(category) <> ''
        GROUP BY lower(trim(category))`,
     )
+    .bind(context.household.id, context.household.id)
     .run();
 
-  return Response.json(await listCategories());
+  return Response.json(await listCategories(context.household.id));
 }
 
 export async function POST(request: Request) {
+  const context = await requireApiContext(request, 'write');
+  if (context instanceof Response) return context;
   const body = (await request.json()) as Record<string, unknown>;
   const name = cleanCategoryName(body.name);
   const normalizedName = normalizeCategoryName(name);
@@ -40,7 +46,12 @@ export async function POST(request: Request) {
   const [duplicate] = await db
     .select({ id: productCategories.id })
     .from(productCategories)
-    .where(eq(productCategories.normalizedName, normalizedName))
+    .where(
+      and(
+        eq(productCategories.householdId, context.household.id),
+        eq(productCategories.normalizedName, normalizedName),
+      ),
+    )
     .limit(1);
   if (duplicate)
     return Response.json(
@@ -50,12 +61,14 @@ export async function POST(request: Request) {
 
   const [category] = await db
     .insert(productCategories)
-    .values({ name, normalizedName })
+    .values({ householdId: context.household.id, name, normalizedName })
     .returning();
   return Response.json({ ...category, itemCount: 0 }, { status: 201 });
 }
 
 export async function PATCH(request: Request) {
+  const context = await requireApiContext(request, 'write');
+  if (context instanceof Response) return context;
   const body = (await request.json()) as Record<string, unknown>;
   const id = Number(body.id);
   const name = cleanCategoryName(body.name);
@@ -70,14 +83,24 @@ export async function PATCH(request: Request) {
   const [current] = await db
     .select()
     .from(productCategories)
-    .where(eq(productCategories.id, id))
+    .where(
+      and(
+        eq(productCategories.id, id),
+        eq(productCategories.householdId, context.household.id),
+      ),
+    )
     .limit(1);
   if (!current)
     return Response.json({ error: 'Category not found.' }, { status: 404 });
   const [duplicate] = await db
     .select({ id: productCategories.id })
     .from(productCategories)
-    .where(eq(productCategories.normalizedName, normalizedName))
+    .where(
+      and(
+        eq(productCategories.householdId, context.household.id),
+        eq(productCategories.normalizedName, normalizedName),
+      ),
+    )
     .limit(1);
   if (duplicate && duplicate.id !== id)
     return Response.json(
@@ -89,26 +112,28 @@ export async function PATCH(request: Request) {
   await binding.batch([
     binding
       .prepare(
-        'UPDATE product_categories SET name = ?, normalized_name = ? WHERE id = ?',
+        'UPDATE product_categories SET name = ?, normalized_name = ? WHERE id = ? AND household_id = ?',
       )
-      .bind(name, normalizedName, id),
+      .bind(name, normalizedName, id, context.household.id),
     binding
       .prepare(
-        'UPDATE inventory_items SET category = ? WHERE lower(trim(category)) = ?',
+        'UPDATE inventory_items SET category = ? WHERE household_id = ? AND lower(trim(category)) = ?',
       )
-      .bind(name, current.normalizedName),
+      .bind(name, context.household.id, current.normalizedName),
     binding
       .prepare(
-        'UPDATE purchases SET category = ? WHERE lower(trim(category)) = ?',
+        'UPDATE purchases SET category = ? WHERE household_id = ? AND lower(trim(category)) = ?',
       )
-      .bind(name, current.normalizedName),
+      .bind(name, context.household.id, current.normalizedName),
   ]);
 
-  const categories = await listCategories();
+  const categories = await listCategories(context.household.id);
   return Response.json(categories.find((category) => category.id === id));
 }
 
 export async function DELETE(request: Request) {
+  const context = await requireApiContext(request, 'write');
+  if (context instanceof Response) return context;
   const id = Number(new URL(request.url).searchParams.get('id'));
   if (!Number.isInteger(id))
     return Response.json(
@@ -116,7 +141,7 @@ export async function DELETE(request: Request) {
       { status: 400 },
     );
 
-  const categories = await listCategories();
+  const categories = await listCategories(context.household.id);
   const category = categories.find((row) => row.id === id);
   if (!category)
     return Response.json({ error: 'Category not found.' }, { status: 404 });
@@ -129,21 +154,31 @@ export async function DELETE(request: Request) {
       { status: 409 },
     );
 
-  await getDb().delete(productCategories).where(eq(productCategories.id, id));
+  await getDb()
+    .delete(productCategories)
+    .where(
+      and(
+        eq(productCategories.id, id),
+        eq(productCategories.householdId, context.household.id),
+      ),
+    );
   return Response.json({ id });
 }
 
-async function listCategories() {
+async function listCategories(householdId: number) {
   const result = await getDbBinding()
     .prepare(
       `SELECT c.id, c.name, c.normalized_name AS normalizedName,
               c.created_at AS createdAt, COUNT(i.id) AS itemCount
        FROM product_categories c
        LEFT JOIN inventory_items i
-         ON lower(trim(i.category)) = c.normalized_name
+         ON i.household_id = c.household_id
+        AND lower(trim(i.category)) = c.normalized_name
+       WHERE c.household_id = ?
        GROUP BY c.id, c.name, c.normalized_name, c.created_at
        ORDER BY c.name COLLATE NOCASE`,
     )
+    .bind(householdId)
     .all<CategoryRow>();
   return result.results.map((row) => ({
     ...row,
