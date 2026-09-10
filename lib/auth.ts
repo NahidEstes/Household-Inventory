@@ -167,11 +167,7 @@ export async function createSession(
   userId: number,
   selectedHouseholdId: number,
 ) {
-  const token = randomToken();
-  const now = new Date();
-  const expiresAt = new Date(
-    now.getTime() + SESSION_TTL_SECONDS * 1000,
-  ).toISOString();
+  const session = await prepareSession(request, userId, selectedHouseholdId);
   await getDbBinding()
     .prepare(
       `INSERT INTO sessions
@@ -179,18 +175,37 @@ export async function createSession(
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
-      recordId(),
-      await sha256(token),
-      userId,
-      selectedHouseholdId,
-      expiresAt,
-      now.toISOString(),
-      request.headers.get('user-agent')?.slice(0, 240) ?? null,
+      session.id,
+      session.tokenHash,
+      session.userId,
+      session.selectedHouseholdId,
+      session.expiresAt,
+      session.lastSeenAt,
+      session.userAgent,
     )
     .run();
+  return session;
+}
+
+export async function prepareSession(
+  request: Request,
+  userId: number,
+  selectedHouseholdId: number,
+) {
+  const token = randomToken();
+  const now = new Date();
+  const expiresAt = new Date(
+    now.getTime() + SESSION_TTL_SECONDS * 1000,
+  ).toISOString();
   return {
+    id: recordId(),
     token,
+    tokenHash: await sha256(token),
+    userId,
+    selectedHouseholdId,
     expiresAt,
+    lastSeenAt: now.toISOString(),
+    userAgent: request.headers.get('user-agent')?.slice(0, 240) ?? null,
     cookie: sessionCookie(token, SESSION_TTL_SECONDS),
   };
 }

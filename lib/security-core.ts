@@ -1,6 +1,7 @@
 const encoder = new TextEncoder();
 
-export const PASSWORD_ITERATIONS = 210_000;
+// Cloudflare Workers caps Web Crypto PBKDF2 at 100,000 iterations.
+export const PASSWORD_ITERATIONS = 100_000;
 export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 
 export function cleanText(value: unknown, maxLength = 160) {

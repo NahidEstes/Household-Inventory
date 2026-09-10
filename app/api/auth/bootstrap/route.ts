@@ -1,5 +1,5 @@
 import { getDbBinding } from '@/db';
-import { bootstrapSecret, createSession } from '@/lib/auth';
+import { bootstrapSecret, prepareSession } from '@/lib/auth';
 import { jsonError, readJsonObject, requireSafeMutation } from '@/lib/http';
 import {
   cleanText,
@@ -56,8 +56,23 @@ export async function POST(request: Request) {
     .first<{ id: number; name: string }>();
   const householdId = household?.id ?? 1;
   const now = new Date().toISOString();
+  let passwordHash: string;
+  let session: Awaited<ReturnType<typeof prepareSession>>;
   try {
-    await binding.batch([
+    [passwordHash, session] = await Promise.all([
+      hashPassword(password),
+      prepareSession(request, userId, householdId),
+    ]);
+  } catch (error) {
+    logBootstrapError(request, 'credential_preparation', error);
+    return jsonError(
+      'Owner setup could not be completed. Please try again.',
+      500,
+    );
+  }
+
+  try {
+    const results = await binding.batch([
       binding
         .prepare(
           'INSERT OR IGNORE INTO households (id, name, created_at) VALUES (?, ?, ?)',
@@ -68,15 +83,7 @@ export async function POST(request: Request) {
           `INSERT INTO users (id, email, normalized_email, display_name, password_hash, status, created_at)
            SELECT ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM users)`,
         )
-        .bind(
-          userId,
-          email,
-          email,
-          displayName,
-          await hashPassword(password),
-          'active',
-          now,
-        ),
+        .bind(userId, email, email, displayName, passwordHash, 'active', now),
       binding
         .prepare(
           'INSERT INTO household_memberships (id, household_id, user_id, role, created_at) VALUES (?, ?, ?, ?, ?)',
@@ -87,13 +94,69 @@ export async function POST(request: Request) {
           'UPDATE households SET created_by_user_id = COALESCE(created_by_user_id, ?) WHERE id = ?',
         )
         .bind(userId, householdId),
+      binding
+        .prepare(
+          `INSERT INTO sessions
+           (id, token_hash, user_id, selected_household_id, expires_at, last_seen_at, user_agent)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          session.id,
+          session.tokenHash,
+          session.userId,
+          session.selectedHouseholdId,
+          session.expiresAt,
+          session.lastSeenAt,
+          session.userAgent,
+        ),
     ]);
-  } catch {
-    return jsonError('Owner setup is no longer available.', 409);
+    if (Number(results[1]?.meta?.changes ?? 0) !== 1)
+      throw new Error('The first-user insert was not applied.');
+  } catch (error) {
+    if (await bootstrapHasUser(binding))
+      return jsonError('Owner setup is no longer available.', 409);
+    logBootstrapError(request, 'database_batch', error);
+    return jsonError(
+      'Owner setup could not be completed. Please try again.',
+      500,
+    );
   }
-  const session = await createSession(request, userId, householdId);
   return Response.json(
     { ok: true },
     { status: 201, headers: { 'Set-Cookie': session.cookie } },
   );
+}
+
+async function bootstrapHasUser(binding: ReturnType<typeof getDbBinding>) {
+  try {
+    const row = await binding
+      .prepare('SELECT EXISTS(SELECT 1 FROM users) AS existsValue')
+      .first<{ existsValue: number }>();
+    return Number(row?.existsValue ?? 0) === 1;
+  } catch {
+    return false;
+  }
+}
+
+function logBootstrapError(request: Request, stage: string, error: unknown) {
+  const details =
+    error instanceof Error
+      ? {
+          name: error.name,
+          message: redactErrorMessage(error.message),
+        }
+      : { name: 'UnknownError', message: 'Non-error exception' };
+  console.error('owner_bootstrap_failed', {
+    stage,
+    requestId: request.headers.get('cf-ray') ?? 'unavailable',
+    ...details,
+  });
+}
+
+function redactErrorMessage(message: string) {
+  return message
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, '[redacted-email]')
+    .replace(/\b[A-Za-z0-9_-]{32,}\b/g, '[redacted-token]')
+    .slice(0, 500);
 }
