@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import {
   batchIdentity,
   canChangeMembership,
@@ -14,6 +15,93 @@ import {
   sha256,
   verifyPassword,
 } from '../lib/security-core.ts';
+import {
+  addQuantities,
+  formatQuantity,
+  isValidQuantity,
+  planPurchaseQuantityAdjustment,
+} from '../lib/quantity.ts';
+import {
+  aggregateEssentialStock,
+  essentialShoppingQuantity,
+  essentialStatus,
+} from '../lib/essentials-core.ts';
+import { AUTO_ADD_ESSENTIALS_SQL } from '../lib/essentials-sql.ts';
+
+test('essentials combine expiry batches without creating separate stock', () => {
+  const product = { normalizedName: 'milk', normalizedBrand: '', unit: 'L' };
+  const batches = [
+    {
+      name: 'Milk',
+      normalizedName: 'milk',
+      brand: null,
+      normalizedBrand: '',
+      unit: 'L',
+      quantity: 0.25,
+      category: 'Dairy',
+      location: 'Fridge',
+    },
+    {
+      name: 'Milk',
+      normalizedName: 'milk',
+      brand: null,
+      normalizedBrand: '',
+      unit: 'L',
+      quantity: 0.75,
+      category: 'Dairy',
+      location: 'Fridge',
+    },
+    {
+      name: 'Milk',
+      normalizedName: 'milk',
+      brand: null,
+      normalizedBrand: '',
+      unit: 'pcs',
+      quantity: 4,
+      category: 'Dairy',
+      location: 'Fridge',
+    },
+  ];
+  const result = aggregateEssentialStock(product, batches, normalizeName);
+  assert.equal(result.currentStock, 1);
+  assert.equal(result.matching.length, 2);
+  assert.equal(essentialStatus(1, 1), 'Buy Soon');
+  assert.equal(essentialStatus(0.5, 1), 'Low Stock');
+  assert.equal(essentialStatus(0, 1), 'Out of Stock');
+  assert.equal(essentialStatus(1.001, 1), 'In Stock');
+  assert.equal(essentialShoppingQuantity(0.9, 1), 0.1);
+});
+
+test('auto-add uses combined stock and never duplicates an active shopping item', () => {
+  const db = new DatabaseSync(':memory:');
+  db.exec(`
+    CREATE TABLE essential_items (household_id INTEGER, name TEXT, normalized_name TEXT, normalized_brand TEXT, unit TEXT, minimum_stock REAL, auto_add_to_shopping_list INTEGER);
+    CREATE TABLE household_settings (household_id INTEGER, auto_add_essentials INTEGER);
+    CREATE TABLE inventory_items (household_id INTEGER, name TEXT, normalized_name TEXT, brand TEXT, normalized_brand TEXT, unit TEXT, quantity REAL);
+    CREATE TABLE shopping_items (household_id INTEGER, name TEXT, quantity REAL, unit TEXT, completed INTEGER);
+    INSERT INTO household_settings VALUES (1, 1);
+    INSERT INTO essential_items VALUES (1, 'Milk', 'milk', '', 'L', 2, 1);
+    INSERT INTO inventory_items VALUES (1, 'Milk', 'milk', NULL, '', 'L', 0.5);
+    INSERT INTO inventory_items VALUES (1, 'Milk', 'milk', NULL, '', 'L', 0.75);
+  `);
+  const sync = db.prepare(AUTO_ADD_ESSENTIALS_SQL);
+  sync.run(1);
+  sync.run(1);
+  assert.deepEqual(
+    db
+      .prepare('SELECT name, quantity, unit FROM shopping_items')
+      .all()
+      .map((row) => ({ ...row })),
+    [{ name: 'Milk', quantity: 0.75, unit: 'L' }],
+  );
+  db.exec('UPDATE inventory_items SET quantity = 2 WHERE quantity = 0.5');
+  sync.run(1);
+  assert.equal(
+    db.prepare('SELECT COUNT(*) AS count FROM shopping_items').get().count,
+    1,
+  );
+  db.close();
+});
 
 test('password hashes are salted and verifiable', async () => {
   const first = await hashPassword('correct horse battery staple');
@@ -78,6 +166,50 @@ test('different brand, location or expiry remains a separate inventory batch', (
   assert.notEqual(
     batchIdentity(base),
     batchIdentity({ ...base, expiryDate: '2026-09-25' }),
+  );
+});
+
+test('quantities keep three-decimal accuracy without trailing zeroes', () => {
+  assert.equal(isValidQuantity(1.235), true);
+  assert.equal(isValidQuantity(1.2345), false);
+  assert.equal(addQuantities(0.1, 0.2), 0.3);
+  assert.equal(formatQuantity(1), '1');
+  assert.equal(formatQuantity(1.25), '1.25');
+  assert.equal(formatQuantity(1.235), '1.235');
+});
+
+test('purchase quantity edits reconcile stock and block unsafe changes', () => {
+  assert.deepEqual(
+    planPurchaseQuantityAdjustment({
+      currentBatchQuantity: 4,
+      currentPurchaseQuantity: 2.5,
+      newPurchaseQuantity: 3,
+      identityChanged: false,
+    }),
+    {
+      allowed: true,
+      currentBatchAfter: 4.5,
+      currentBatchChange: 0.5,
+      targetQuantityToAdd: 0,
+    },
+  );
+  assert.deepEqual(
+    planPurchaseQuantityAdjustment({
+      currentBatchQuantity: 0.4,
+      currentPurchaseQuantity: 2.5,
+      newPurchaseQuantity: 2,
+      identityChanged: false,
+    }),
+    { allowed: false },
+  );
+  assert.deepEqual(
+    planPurchaseQuantityAdjustment({
+      currentBatchQuantity: 2,
+      currentPurchaseQuantity: 2.5,
+      newPurchaseQuantity: 2.5,
+      identityChanged: true,
+    }),
+    { allowed: false },
   );
 });
 

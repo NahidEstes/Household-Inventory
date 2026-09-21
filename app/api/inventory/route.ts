@@ -4,7 +4,15 @@ import { inventoryItems, stockChanges } from '@/db/schema';
 import { requireApiContext } from '@/lib/auth';
 import { canonicalBrandName } from '@/lib/brands';
 import { canonicalCategoryName } from '@/lib/categories';
+import { canonicalLocationName } from '@/lib/locations';
 import { canonicalProductName } from '@/lib/products';
+import { syncEssentialShopping } from '@/lib/essentials';
+import {
+  addQuantities,
+  isValidQuantity,
+  roundQuantity,
+  subtractQuantities,
+} from '@/lib/quantity';
 import { normalizeName, recordId } from '@/lib/security-core';
 
 export async function GET(request: Request) {
@@ -32,24 +40,27 @@ export async function POST(request: Request) {
     body.category,
     context.household.id,
   );
-  const location = textField(body.location);
+  const location = await canonicalLocationName(
+    body.location,
+    context.household.id,
+  );
   const unit = textField(body.unit);
   const specificSpot = textField(body.specificSpot);
   const expiryDate = textField(body.expiryDate);
-  const quantity = Number(body.quantity);
+  const quantityValue = Number(body.quantity);
   if (
     !name ||
     !category ||
     !location ||
     !unit ||
-    !Number.isFinite(quantity) ||
-    quantity <= 0
+    !isValidQuantity(quantityValue)
   ) {
     return Response.json(
       { error: 'Please provide valid item details.' },
       { status: 400 },
     );
   }
+  const quantity = roundQuantity(quantityValue);
   const db = getDb();
   const normalizedName = normalizeName(name);
   const [existingBatch] = await db
@@ -62,14 +73,14 @@ export async function POST(request: Request) {
         sql`COALESCE(${inventoryItems.normalizedBrand}, '') = ${brand.normalizedName ?? ''}`,
         eq(inventoryItems.unit, unit),
         eq(inventoryItems.location, location),
-        sql`COALESCE(${inventoryItems.specificSpot}, '') = ${specificSpot}`,
+        sql`lower(trim(COALESCE(${inventoryItems.specificSpot}, ''))) = ${specificSpot.toLowerCase()}`,
         sql`COALESCE(${inventoryItems.expiryDate}, '') = ${expiryDate}`,
       ),
     )
     .limit(1);
   const id = existingBatch?.id ?? recordId();
-  const quantityBefore = existingBatch?.quantity ?? 0;
-  const quantityAfter = quantityBefore + quantity;
+  const quantityBefore = roundQuantity(existingBatch?.quantity ?? 0);
+  const quantityAfter = addQuantities(quantityBefore, quantity);
   const itemWrite = existingBatch
     ? db
         .update(inventoryItems)
@@ -116,6 +127,7 @@ export async function POST(request: Request) {
       createdAt: new Date().toISOString(),
     }),
   ]);
+  await syncEssentialShopping(context.household.id);
   return Response.json(itemRows[0], { status: existingBatch ? 200 : 201 });
 }
 
@@ -134,23 +146,26 @@ export async function PATCH(request: Request) {
     body.category,
     context.household.id,
   );
-  const location = textField(body.location);
+  const location = await canonicalLocationName(
+    body.location,
+    context.household.id,
+  );
   const unit = textField(body.unit);
-  const quantity = Number(body.quantity);
+  const quantityValue = Number(body.quantity);
   if (
     !Number.isInteger(id) ||
     !name ||
     !category ||
     !location ||
     !unit ||
-    !Number.isFinite(quantity) ||
-    quantity <= 0
+    !isValidQuantity(quantityValue)
   ) {
     return Response.json(
       { error: 'Please provide valid item details.' },
       { status: 400 },
     );
   }
+  const quantity = roundQuantity(quantityValue);
   const db = getDb();
   const [current] = await db
     .select()
@@ -164,6 +179,7 @@ export async function PATCH(request: Request) {
     .limit(1);
   if (!current)
     return Response.json({ error: 'Item not found.' }, { status: 404 });
+  const currentQuantity = roundQuantity(current.quantity);
   const update = db
     .update(inventoryItems)
     .set({
@@ -186,7 +202,7 @@ export async function PATCH(request: Request) {
     )
     .returning();
   let item;
-  if (quantity !== current.quantity) {
+  if (quantity !== currentQuantity) {
     const [itemRows] = await db.batch([
       update,
       db.insert(stockChanges).values({
@@ -198,8 +214,8 @@ export async function PATCH(request: Request) {
         brand: brand.name,
         normalizedBrand: brand.normalizedName,
         unit,
-        quantityChange: quantity - current.quantity,
-        quantityBefore: current.quantity,
+        quantityChange: subtractQuantities(quantity, currentQuantity),
+        quantityBefore: currentQuantity,
         quantityAfter: quantity,
         reason: 'Adjustment',
         createdAt: new Date().toISOString(),
@@ -211,6 +227,7 @@ export async function PATCH(request: Request) {
   }
   if (!item)
     return Response.json({ error: 'Item not found.' }, { status: 404 });
+  await syncEssentialShopping(context.household.id);
   return Response.json(item);
 }
 
@@ -254,6 +271,7 @@ export async function DELETE(request: Request) {
         ),
       ),
   ]);
+  await syncEssentialShopping(context.household.id);
   return Response.json({ id: item.id });
 }
 

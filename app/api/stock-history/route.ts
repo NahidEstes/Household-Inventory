@@ -2,6 +2,12 @@ import { and, desc, eq } from 'drizzle-orm';
 import { getDb } from '@/db';
 import { inventoryItems, stockChanges } from '@/db/schema';
 import { requireApiContext } from '@/lib/auth';
+import { syncEssentialShopping } from '@/lib/essentials';
+import {
+  isValidQuantity,
+  roundQuantity,
+  subtractQuantities,
+} from '@/lib/quantity';
 import { normalizeName, recordId } from '@/lib/security-core';
 
 const removalReasons = new Set(['Used', 'Wasted', 'Other']);
@@ -36,19 +42,19 @@ export async function POST(request: Request) {
   if (context instanceof Response) return context;
   const body = (await request.json()) as Record<string, unknown>;
   const inventoryItemId = Number(body.inventoryItemId);
-  const quantity = Number(body.quantity);
+  const quantityValue = Number(body.quantity);
   const reason = textField(body.reason);
   const note = textField(body.note);
   if (
     !Number.isInteger(inventoryItemId) ||
-    !Number.isFinite(quantity) ||
-    quantity <= 0 ||
+    !isValidQuantity(quantityValue) ||
     !removalReasons.has(reason)
   )
     return Response.json(
       { error: 'Please provide a valid quantity and reason.' },
       { status: 400 },
     );
+  const quantity = roundQuantity(quantityValue);
 
   const db = getDb();
   const [current] = await db
@@ -66,15 +72,16 @@ export async function POST(request: Request) {
       { error: 'Inventory item not found.' },
       { status: 404 },
     );
-  if (quantity > current.quantity)
+  const quantityBefore = roundQuantity(current.quantity);
+  if (quantity > quantityBefore)
     return Response.json(
-      { error: `You can remove at most ${current.quantity} ${current.unit}.` },
+      { error: `You can remove at most ${quantityBefore} ${current.unit}.` },
       { status: 409 },
     );
 
   const quantityAfter = Math.max(
     0,
-    Math.round((current.quantity - quantity) * 10000) / 10000,
+    subtractQuantities(quantityBefore, quantity),
   );
   const historyId = recordId();
   const [updatedRows, historyRows] = await db.batch([
@@ -100,7 +107,7 @@ export async function POST(request: Request) {
         normalizedBrand: current.normalizedBrand,
         unit: current.unit,
         quantityChange: -quantity,
-        quantityBefore: current.quantity,
+        quantityBefore,
         quantityAfter,
         reason,
         note: note || null,
@@ -108,6 +115,8 @@ export async function POST(request: Request) {
       })
       .returning(),
   ]);
+
+  await syncEssentialShopping(context.household.id);
 
   return Response.json({ item: updatedRows[0], history: historyRows[0] });
 }

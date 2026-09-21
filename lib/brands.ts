@@ -11,7 +11,11 @@ export function normalizeBrandName(value: unknown) {
   return normalizeName(cleanBrandName(value));
 }
 
-export async function canonicalBrandName(value: unknown, householdId: number) {
+export async function canonicalBrandName(
+  value: unknown,
+  householdId: number,
+  createIfMissing = true,
+) {
   const name = cleanBrandName(value);
   const normalizedName = normalizeBrandName(name);
   if (!normalizedName) return { name: null, normalizedName: null };
@@ -27,6 +31,7 @@ export async function canonicalBrandName(value: unknown, householdId: number) {
     )
     .limit(1);
   if (existing) return { name: existing.name, normalizedName };
+  if (!createIfMissing) return { name, normalizedName };
   await db
     .insert(productBrands)
     .values({ id: recordId(), householdId, name, normalizedName })

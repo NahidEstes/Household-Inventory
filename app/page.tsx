@@ -21,9 +21,11 @@ import {
   MinusCircle,
   Moon,
   PackagePlus,
+  PackageCheck,
   Pencil,
   Plus,
   ReceiptText,
+  RotateCcw,
   Search,
   Settings,
   ShieldCheck,
@@ -49,6 +51,13 @@ import {
 } from '@/components/product-name-autocomplete';
 import { BrandAutocomplete } from '@/components/brand-autocomplete';
 import {
+  EssentialsView,
+  type EssentialInput,
+  type EssentialItem,
+} from '@/components/essentials-view';
+import { essentialShoppingQuantity } from '@/lib/essentials-core';
+import { formatQuantity } from '@/lib/quantity';
+import {
   AccountSettings,
   type AuthState,
   HouseholdSwitcher,
@@ -60,7 +69,9 @@ type Section =
   | 'Meal planner'
   | 'Purchases'
   | 'Inventory'
+  | 'Essentials'
   | 'Categories'
+  | 'Locations'
   | 'Storage'
   | 'Shopping list'
   | 'Expenses'
@@ -99,6 +110,7 @@ type Purchase = {
   expiryDate: string | null;
   store: string | null;
   location: string;
+  specificSpot: string | null;
   inventoryItemId: number;
   expenseId: number;
   createdAt: string;
@@ -127,6 +139,13 @@ type StockChange = {
   createdAt: string;
 };
 type ProductCategory = {
+  id: number;
+  name: string;
+  normalizedName: string;
+  itemCount: number;
+  createdAt: string;
+};
+type ProductLocation = {
   id: number;
   name: string;
   normalizedName: string;
@@ -186,7 +205,9 @@ const navItems = [
   { label: 'Meal planner' as Section, icon: UtensilsCrossed },
   { label: 'Purchases' as Section, icon: PackagePlus },
   { label: 'Inventory' as Section, icon: Box },
+  { label: 'Essentials' as Section, icon: PackageCheck },
   { label: 'Categories' as Section, icon: Tags },
+  { label: 'Locations' as Section, icon: MapPin },
   { label: 'Storage' as Section, icon: Warehouse },
   { label: 'Shopping list' as Section, icon: ClipboardList },
   { label: 'Expenses' as Section, icon: WalletCards },
@@ -232,10 +253,20 @@ const sectionCopy: Record<
     title: 'Inventory',
     subtitle: 'Track quantities, locations and expiry dates.',
   },
+  Essentials: {
+    eyebrow: 'EVERYDAY STOCK',
+    title: 'Essentials',
+    subtitle: 'Keep the items you use most within reach.',
+  },
   Categories: {
     eyebrow: 'ITEM ORGANISATION',
     title: 'Categories',
     subtitle: 'Keep product groups clear and consistent across your stock.',
+  },
+  Locations: {
+    eyebrow: 'STORAGE SETUP',
+    title: 'Locations',
+    subtitle: 'Manage the places where your household items are stored.',
   },
   Storage: {
     eyebrow: 'STORAGE',
@@ -275,12 +306,20 @@ export default function HomeInventory() {
   const [authLoading, setAuthLoading] = useState(true);
   const [activeSection, setActiveSection] = useState<Section>('Dashboard');
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [essentials, setEssentials] = useState<EssentialItem[]>([]);
+  const [autoAddEssentials, setAutoAddEssentials] = useState(false);
+  const [essentialDialogOpen, setEssentialDialogOpen] = useState(false);
+  const [editingEssential, setEditingEssential] =
+    useState<EssentialItem | null>(null);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [shopping, setShopping] = useState<ShoppingItem[]>([]);
   const [meals, setMeals] = useState<MealPlan[]>([]);
   const [tasks, setTasks] = useState<HouseholdTask[]>([]);
   const [productCategories, setProductCategories] = useState<ProductCategory[]>(
+    [],
+  );
+  const [productLocations, setProductLocations] = useState<ProductLocation[]>(
     [],
   );
   const [settings, setSettings] = useState<HouseholdSettings>({
@@ -294,6 +333,7 @@ export default function HomeInventory() {
   const [itemDialogOpen, setItemDialogOpen] = useState(false);
   const [expenseDialogOpen, setExpenseDialogOpen] = useState(false);
   const [purchaseDialogOpen, setPurchaseDialogOpen] = useState(false);
+  const [editingPurchase, setEditingPurchase] = useState<Purchase | null>(null);
   const [shoppingDialogOpen, setShoppingDialogOpen] = useState(false);
   const [mealDialogOpen, setMealDialogOpen] = useState(false);
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
@@ -315,6 +355,11 @@ export default function HomeInventory() {
     useState<ProductCategory | null>(null);
   const [categoryDeleteTarget, setCategoryDeleteTarget] =
     useState<ProductCategory | null>(null);
+  const [locationDialogOpen, setLocationDialogOpen] = useState(false);
+  const [editingLocation, setEditingLocation] =
+    useState<ProductLocation | null>(null);
+  const [locationDeleteTarget, setLocationDeleteTarget] =
+    useState<ProductLocation | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -333,6 +378,8 @@ export default function HomeInventory() {
           '/api/tasks',
           '/api/settings',
           '/api/categories',
+          '/api/locations',
+          '/api/essentials',
         ].map((url) => fetch(url)),
       );
       if (responses.some((response) => response.status === 401)) {
@@ -350,6 +397,8 @@ export default function HomeInventory() {
         taskData,
         settingsData,
         categoryData,
+        locationData,
+        essentialData,
       ] = await Promise.all(responses.map((response) => response.json()));
       setInventory(inventoryData as InventoryItem[]);
       setExpenses(expenseData as Expense[]);
@@ -359,6 +408,11 @@ export default function HomeInventory() {
       setTasks(taskData as HouseholdTask[]);
       setSettings(settingsData as HouseholdSettings);
       setProductCategories(categoryData as ProductCategory[]);
+      setProductLocations(locationData as ProductLocation[]);
+      setEssentials((essentialData as { items: EssentialItem[] }).items);
+      setAutoAddEssentials(
+        (essentialData as { autoAddWhenLow: boolean }).autoAddWhenLow,
+      );
     } catch {
       setError('We could not load your household data. Please try again.');
     } finally {
@@ -466,7 +520,7 @@ export default function HomeInventory() {
           annotations: { readOnlyHint: false, untrustedContentHint: false },
           execute: () => {
             setActiveSection('Purchases');
-            setPurchaseDialogOpen(true);
+            openNewPurchase();
             return { status: 'ready', form: 'purchase' };
           },
         },
@@ -526,6 +580,23 @@ export default function HomeInventory() {
         category.name.toLowerCase().includes(query.toLowerCase()),
       ),
     [categoryRecords, query],
+  );
+  const locationRecords = useMemo(
+    () =>
+      productLocations.map((location) => ({
+        ...location,
+        itemCount: inventory.filter(
+          (item) => item.location.toLowerCase() === location.name.toLowerCase(),
+        ).length,
+      })),
+    [inventory, productLocations],
+  );
+  const filteredLocationRecords = useMemo(
+    () =>
+      locationRecords.filter((location) =>
+        location.name.toLowerCase().includes(query.toLowerCase()),
+      ),
+    [locationRecords, query],
   );
   const filteredInventory = useMemo(
     () =>
@@ -632,9 +703,121 @@ export default function HomeInventory() {
     setItemDialogOpen(true);
   }
 
+  function openNewPurchase() {
+    setEditingPurchase(null);
+    setPurchaseDialogOpen(true);
+  }
+
+  function openEditPurchase(purchase: Purchase) {
+    setEditingPurchase(purchase);
+    setPurchaseDialogOpen(true);
+  }
+
   function showNotice(message: string) {
     setNotice(message);
     window.setTimeout(() => setNotice(''), 3500);
+  }
+
+  async function refreshEssentialsAndShopping() {
+    try {
+      const [essentialsResponse, shoppingResponse] = await Promise.all([
+        fetch('/api/essentials'),
+        fetch('/api/shopping'),
+      ]);
+      if (!essentialsResponse.ok || !shoppingResponse.ok)
+        throw new Error('Data request failed');
+      const data = (await essentialsResponse.json()) as {
+        items: EssentialItem[];
+        autoAddWhenLow: boolean;
+      };
+      setEssentials(data.items);
+      setAutoAddEssentials(data.autoAddWhenLow);
+      setShopping((await shoppingResponse.json()) as ShoppingItem[]);
+      return true;
+    } catch {
+      showNotice('Saved, but Essentials or Shopping List could not refresh. Please reload.');
+      return false;
+    }
+  }
+
+  async function saveEssential(input: EssentialInput) {
+    try {
+      const response = await fetch('/api/essentials', {
+        method: input.id ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+      if (!response.ok) {
+        showNotice(await responseError(response, 'Could not save the essential.'));
+        return false;
+      }
+      if (await refreshEssentialsAndShopping())
+        showNotice(input.id ? 'Essential updated.' : 'Essential added.');
+      return true;
+    } catch {
+      showNotice('Could not save the essential. Please try again.');
+      return false;
+    }
+  }
+
+  async function removeEssential(item: EssentialItem) {
+    try {
+      const response = await fetch(`/api/essentials?id=${item.id}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        showNotice(await responseError(response, 'Could not remove the essential.'));
+        return false;
+      }
+      setEssentials((rows) => rows.filter((row) => row.id !== item.id));
+      showNotice(`${item.name} removed from Essentials. Inventory was not changed.`);
+      return true;
+    } catch {
+      showNotice('Could not remove the essential. Please try again.');
+      return false;
+    }
+  }
+
+  async function addEssentialToShopping(item: EssentialItem) {
+    try {
+      const response = await fetch('/api/shopping', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: item.name,
+          quantity: essentialShoppingQuantity(item.currentStock, item.minimumStock),
+          unit: item.unit,
+        }),
+      });
+      if (!response.ok) {
+        showNotice(await responseError(response, 'Could not add this essential to Shopping List.'));
+        return;
+      }
+      if (await refreshEssentialsAndShopping())
+        showNotice(`${item.name} is on your Shopping List.`);
+    } catch {
+      showNotice('Could not add this essential to Shopping List. Please try again.');
+    }
+  }
+
+  async function toggleAutoAddEssentials(enabled: boolean) {
+    try {
+      const response = await fetch('/api/essentials/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoAddWhenLow: enabled }),
+      });
+      if (!response.ok) {
+        showNotice(await responseError(response, 'Could not update auto-add.'));
+        return false;
+      }
+      if (await refreshEssentialsAndShopping())
+        showNotice(enabled ? 'Auto-add is on.' : 'Auto-add is off.');
+      return true;
+    } catch {
+      showNotice('Could not update auto-add. Please try again.');
+      return false;
+    }
   }
 
   async function saveInventoryItem(event: SyntheticEvent<HTMLFormElement>) {
@@ -658,6 +841,7 @@ export default function HomeInventory() {
           ? rows.map((row) => (row.id === item.id ? item : row))
           : [item, ...rows],
     );
+    await refreshEssentialsAndShopping();
     setItemDialogOpen(false);
     showNotice(
       editingItem
@@ -691,30 +875,49 @@ export default function HomeInventory() {
     const payload = Object.fromEntries(
       new FormData(event.currentTarget).entries(),
     );
+    if (editingPurchase) payload.id = String(editingPurchase.id);
     const response = await fetch('/api/purchases', {
-      method: 'POST',
+      method: editingPurchase ? 'PATCH' : 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
     if (!response.ok)
       return showNotice(
-        'Could not save the purchase. Please check the details.',
+        await responseError(
+          response,
+          'Could not save the purchase. Please check the details.',
+        ),
       );
     const result = (await response.json()) as {
       purchase: Purchase;
-      inventoryItem: InventoryItem;
+      inventoryItem?: InventoryItem;
+      inventoryItems?: InventoryItem[];
       expense: Expense;
     };
+    if (editingPurchase) {
+      await loadData();
+      setPurchaseDialogOpen(false);
+      setEditingPurchase(null);
+      showNotice(`${result.purchase.itemName} purchase was updated safely.`);
+      return;
+    }
+    const createdInventoryItem = result.inventoryItem;
+    if (!createdInventoryItem)
+      return showNotice(
+        'The purchase was saved but inventory did not refresh.',
+      );
     setPurchases((rows) => [result.purchase, ...rows]);
     setInventory((rows) =>
-      rows.some((row) => row.id === result.inventoryItem.id)
+      rows.some((row) => row.id === createdInventoryItem.id)
         ? rows.map((row) =>
-            row.id === result.inventoryItem.id ? result.inventoryItem : row,
+            row.id === createdInventoryItem.id ? createdInventoryItem : row,
           )
-        : [result.inventoryItem, ...rows],
+        : [createdInventoryItem, ...rows],
     );
     setExpenses((rows) => [result.expense, ...rows]);
+    await refreshEssentialsAndShopping();
     setPurchaseDialogOpen(false);
+    setEditingPurchase(null);
     showNotice(
       `${result.purchase.itemName} saved to purchases, inventory and expenses.`,
     );
@@ -867,9 +1070,10 @@ export default function HomeInventory() {
     setInventory((rows) =>
       rows.map((row) => (row.id === result.item.id ? result.item : row)),
     );
+    await refreshEssentialsAndShopping();
     setStockRemovalItem(null);
     showNotice(
-      `${Math.abs(result.history.quantityChange)} ${result.history.unit} removed from ${result.item.name}.`,
+      `${formatQuantity(Math.abs(result.history.quantityChange))} ${result.history.unit} removed from ${result.item.name}.`,
     );
   }
 
@@ -907,7 +1111,9 @@ export default function HomeInventory() {
       setShopping((rows) =>
         rows.map((row) => (row.id === item.id ? item : row)),
       );
-      showNotice('Could not update the shopping item.');
+      showNotice(
+        await responseError(response, 'Could not update the shopping item.'),
+      );
     }
   }
 
@@ -948,6 +1154,7 @@ export default function HomeInventory() {
       setExpenses((rows) => rows.filter((row) => row.id !== deleted.expenseId));
       await loadData();
     }
+    if (deleteTarget.kind === 'inventory') await refreshEssentialsAndShopping();
     showNotice(`${deleteTarget.name} was deleted.`);
     setDeleteTarget(null);
   }
@@ -981,6 +1188,13 @@ export default function HomeInventory() {
     if (editingCategory) {
       const previousName = editingCategory.name.toLowerCase();
       setInventory((rows) =>
+        rows.map((item) =>
+          item.category.toLowerCase() === previousName
+            ? { ...item, category: category.name }
+            : item,
+        ),
+      );
+      setEssentials((rows) =>
         rows.map((item) =>
           item.category.toLowerCase() === previousName
             ? { ...item, category: category.name }
@@ -1028,6 +1242,91 @@ export default function HomeInventory() {
     );
     showNotice(`${categoryDeleteTarget.name} category was deleted.`);
     setCategoryDeleteTarget(null);
+  }
+
+  function openNewLocation() {
+    setEditingLocation(null);
+    setLocationDialogOpen(true);
+  }
+
+  function openEditLocation(location: ProductLocation) {
+    setEditingLocation(location);
+    setLocationDialogOpen(true);
+  }
+
+  async function saveLocation(event: SyntheticEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const payload = Object.fromEntries(
+      new FormData(event.currentTarget).entries(),
+    );
+    if (editingLocation) payload.id = String(editingLocation.id);
+    const response = await fetch('/api/locations', {
+      method: editingLocation ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok)
+      return showNotice(
+        await responseError(response, 'Could not save the location.'),
+      );
+    const location = (await response.json()) as ProductLocation;
+    if (editingLocation) {
+      const previousName = editingLocation.name.toLowerCase();
+      setInventory((rows) =>
+        rows.map((item) =>
+          item.location.toLowerCase() === previousName
+            ? { ...item, location: location.name }
+            : item,
+        ),
+      );
+      setEssentials((rows) =>
+        rows.map((item) =>
+          item.location.toLowerCase() === previousName
+            ? { ...item, location: location.name }
+            : item,
+        ),
+      );
+      setPurchases((rows) =>
+        rows.map((item) =>
+          item.location.toLowerCase() === previousName
+            ? { ...item, location: location.name }
+            : item,
+        ),
+      );
+      setProductLocations((rows) =>
+        rows
+          .map((item) => (item.id === location.id ? location : item))
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      );
+    } else {
+      setProductLocations((rows) =>
+        [...rows, location].sort((a, b) => a.name.localeCompare(b.name)),
+      );
+    }
+    setLocationDialogOpen(false);
+    setEditingLocation(null);
+    showNotice(
+      editingLocation
+        ? `${location.name} was updated everywhere.`
+        : `${location.name} location was created.`,
+    );
+  }
+
+  async function confirmDeleteLocation() {
+    if (!locationDeleteTarget || locationDeleteTarget.itemCount > 0) return;
+    const response = await fetch(
+      `/api/locations?id=${locationDeleteTarget.id}`,
+      { method: 'DELETE' },
+    );
+    if (!response.ok)
+      return showNotice(
+        await responseError(response, 'Could not delete the location.'),
+      );
+    setProductLocations((rows) =>
+      rows.filter((item) => item.id !== locationDeleteTarget.id),
+    );
+    showNotice(`${locationDeleteTarget.name} location was deleted.`);
+    setLocationDeleteTarget(null);
   }
 
   async function saveSettings(event: SyntheticEvent<HTMLFormElement>) {
@@ -1151,15 +1450,24 @@ export default function HomeInventory() {
                   ? `, ${settings.householdName}`
                   : ''}
               </h1>
-              <p>{copy.subtitle}</p>
+              <p>
+                {activeSection === 'Essentials'
+                  ? `${essentials.length} essentials, ${essentials.filter((item) => item.status !== 'In Stock').length} need attention`
+                  : copy.subtitle}
+              </p>
             </div>
             <HeaderActions
               readOnly={auth.household.role === 'viewer'}
               section={activeSection}
               onAddExpense={() => setExpenseDialogOpen(true)}
               onAddCategory={openNewCategory}
+              onAddLocation={openNewLocation}
               onAddItem={openNewItem}
-              onAddPurchase={() => setPurchaseDialogOpen(true)}
+              onAddEssential={() => {
+                setEditingEssential(null);
+                setEssentialDialogOpen(true);
+              }}
+              onAddPurchase={openNewPurchase}
               onScheduleShopping={() => openNewShoppingItem()}
               onAddMeal={() => openNewMeal()}
               onGenerateShopping={generateMealShoppingList}
@@ -1203,24 +1511,52 @@ export default function HomeInventory() {
               categoryFilter={categoryFilter}
               categoryRecords={filteredCategoryRecords}
               categories={categories}
+              locationRecords={filteredLocationRecords}
+              productLocations={productLocations}
               expenses={filteredExpenses}
               purchases={filteredPurchases}
               expiryItems={expiryItems}
               inventory={filteredInventory}
+              allInventory={inventory}
+              essentials={essentials}
+              autoAddEssentials={autoAddEssentials}
+              essentialDialogOpen={essentialDialogOpen}
+              editingEssential={editingEssential}
+              essentialQuery={query}
+              onOpenEssentialAdd={() => {
+                setEditingEssential(null);
+                setEssentialDialogOpen(true);
+              }}
+              onOpenEssentialEdit={(item) => {
+                setEditingEssential(item);
+                setEssentialDialogOpen(true);
+              }}
+              onCloseEssentialDialog={() => {
+                setEssentialDialogOpen(false);
+                setEditingEssential(null);
+              }}
+              onSaveEssential={saveEssential}
+              onRemoveEssential={removeEssential}
+              onAddEssentialToShopping={addEssentialToShopping}
+              onToggleAutoAddEssentials={toggleAutoAddEssentials}
               meals={filteredMeals}
               tasks={tasks}
               inventoryByCategory={inventoryByCategory}
               monthlyBudget={settings.monthlyBudget}
               onAddExpense={() => setExpenseDialogOpen(true)}
               onAddCategory={openNewCategory}
+              onAddLocation={openNewLocation}
               onAddItem={openNewItem}
-              onAddPurchase={() => setPurchaseDialogOpen(true)}
+              onAddPurchase={openNewPurchase}
               onEditShopping={openEditShoppingItem}
+              onEditPurchase={openEditPurchase}
               onEditMeal={openEditMeal}
               onDelete={setDeleteTarget}
               onEditItem={openEditItem}
               onEditCategory={openEditCategory}
               onDeleteCategory={setCategoryDeleteTarget}
+              onEditLocation={openEditLocation}
+              onDeleteLocation={setLocationDeleteTarget}
               onRemoveStock={setStockRemovalItem}
               onViewHistory={setHistoryItem}
               onAddToShopping={addOutOfStockToShopping}
@@ -1268,6 +1604,7 @@ export default function HomeInventory() {
         <ItemDialog
           categories={productCategories}
           editingItem={editingItem}
+          locations={productLocations}
           onClose={() => setItemDialogOpen(false)}
           onSubmit={saveInventoryItem}
         />
@@ -1281,7 +1618,12 @@ export default function HomeInventory() {
       {purchaseDialogOpen && (
         <PurchaseDialog
           categories={productCategories}
-          onClose={() => setPurchaseDialogOpen(false)}
+          editingPurchase={editingPurchase}
+          locations={productLocations}
+          onClose={() => {
+            setPurchaseDialogOpen(false);
+            setEditingPurchase(null);
+          }}
           onSubmit={savePurchase}
         />
       )}
@@ -1344,6 +1686,23 @@ export default function HomeInventory() {
           onConfirm={confirmDeleteCategory}
         />
       )}
+      {locationDialogOpen && (
+        <LocationDialog
+          editingLocation={editingLocation}
+          onClose={() => {
+            setLocationDialogOpen(false);
+            setEditingLocation(null);
+          }}
+          onSubmit={saveLocation}
+        />
+      )}
+      {locationDeleteTarget && (
+        <LocationDeleteDialog
+          location={locationDeleteTarget}
+          onCancel={() => setLocationDeleteTarget(null)}
+          onConfirm={confirmDeleteLocation}
+        />
+      )}
       {deleteTarget && (
         <ConfirmDialog
           name={deleteTarget.name}
@@ -1359,9 +1718,11 @@ function HeaderActions({
   section,
   readOnly,
   onAddCategory,
+  onAddLocation,
   onAddMeal,
   onAddExpense,
   onAddItem,
+  onAddEssential,
   onAddPurchase,
   onScheduleShopping,
   onGenerateShopping,
@@ -1369,9 +1730,11 @@ function HeaderActions({
   section: Section;
   readOnly: boolean;
   onAddCategory: () => void;
+  onAddLocation: () => void;
   onAddMeal: () => void;
   onAddExpense: () => void;
   onAddItem: () => void;
+  onAddEssential: () => void;
   onAddPurchase: () => void;
   onScheduleShopping: () => void;
   onGenerateShopping: () => void;
@@ -1414,10 +1777,22 @@ function HeaderActions({
         <PackagePlus size={18} /> Add item
       </button>
     );
+  if (section === 'Essentials')
+    return (
+      <button className="primary-button" onClick={onAddEssential} type="button">
+        <Plus size={18} /> Add Essential
+      </button>
+    );
   if (section === 'Categories')
     return (
       <button className="primary-button" onClick={onAddCategory} type="button">
         <Plus size={18} /> New category
+      </button>
+    );
+  if (section === 'Locations')
+    return (
+      <button className="primary-button" onClick={onAddLocation} type="button">
+        <Plus size={18} /> New location
       </button>
     );
   if (section === 'Expenses')
@@ -1449,26 +1824,45 @@ type SectionProps = {
   categoryFilter: string;
   categoryRecords: ProductCategory[];
   categories: string[];
+  locationRecords: ProductLocation[];
+  productLocations: ProductLocation[];
   expenses: Expense[];
   purchases: Purchase[];
   expiryItems: InventoryItem[];
   inventory: InventoryItem[];
+  allInventory: InventoryItem[];
+  essentials: EssentialItem[];
+  autoAddEssentials: boolean;
+  essentialDialogOpen: boolean;
+  editingEssential: EssentialItem | null;
+  essentialQuery: string;
+  onOpenEssentialAdd: () => void;
+  onOpenEssentialEdit: (item: EssentialItem) => void;
+  onCloseEssentialDialog: () => void;
+  onSaveEssential: (input: EssentialInput) => Promise<boolean>;
+  onRemoveEssential: (item: EssentialItem) => Promise<boolean>;
+  onAddEssentialToShopping: (item: EssentialItem) => Promise<void>;
+  onToggleAutoAddEssentials: (enabled: boolean) => Promise<boolean>;
   meals: MealPlan[];
   tasks: HouseholdTask[];
   inventoryByCategory: [string, number][];
   monthlyBudget: number;
   onAddExpense: () => void;
   onAddCategory: () => void;
+  onAddLocation: () => void;
   onAddItem: () => void;
   onAddPurchase: () => void;
   onAddMeal: (date?: string) => void;
   onAddTask: () => void;
   onDelete: (target: DeleteTarget) => void;
   onEditShopping: (item: ShoppingItem) => void;
+  onEditPurchase: (purchase: Purchase) => void;
   onEditMeal: (meal: MealPlan) => void;
   onEditItem: (item: InventoryItem) => void;
   onEditCategory: (category: ProductCategory) => void;
   onDeleteCategory: (category: ProductCategory) => void;
+  onEditLocation: (location: ProductLocation) => void;
+  onDeleteLocation: (location: ProductLocation) => void;
   onRemoveStock: (item: InventoryItem) => void;
   onViewHistory: (item: InventoryItem) => void;
   onAddToShopping: (item: InventoryItem) => void;
@@ -1497,8 +1891,31 @@ function SectionContent(props: SectionProps) {
     return <MealPlannerView {...props} />;
   if (props.activeSection === 'Purchases') return <PurchasesView {...props} />;
   if (props.activeSection === 'Inventory') return <InventoryView {...props} />;
+  if (props.activeSection === 'Essentials')
+    return (
+      <EssentialsView
+        items={props.essentials}
+        inventory={props.allInventory}
+        shopping={props.shopping}
+        autoAddWhenLow={props.autoAddEssentials}
+        readOnly={props.auth.household.role === 'viewer'}
+        query={props.essentialQuery}
+        dialogOpen={props.essentialDialogOpen}
+        editing={props.editingEssential}
+        onOpenAdd={props.onOpenEssentialAdd}
+        onOpenEdit={props.onOpenEssentialEdit}
+        onCloseDialog={props.onCloseEssentialDialog}
+        onSave={props.onSaveEssential}
+        onRemove={props.onRemoveEssential}
+        onAddToShopping={props.onAddEssentialToShopping}
+        onToggleAuto={props.onToggleAutoAddEssentials}
+        onGoShopping={() => props.onGo('Shopping list')}
+        onGoInventory={() => props.onGo('Inventory')}
+      />
+    );
   if (props.activeSection === 'Categories')
     return <CategoriesView {...props} />;
+  if (props.activeSection === 'Locations') return <LocationsView {...props} />;
   if (props.activeSection === 'Storage') return <StorageView {...props} />;
   if (props.activeSection === 'Shopping list')
     return <ShoppingView {...props} />;
@@ -1541,7 +1958,7 @@ function ScheduleView(props: SectionProps) {
           date: String(item.scheduledDate),
           kind: 'Shopping' as const,
           title: item.name,
-          detail: `${item.quantity} ${item.unit}${item.estimatedPrice === null ? '' : ` · ${sar(item.estimatedPrice)}`}`,
+          detail: `${formatQuantity(item.quantity)} ${item.unit}${item.estimatedPrice === null ? '' : ` · ${sar(item.estimatedPrice)}`}`,
           time: null,
           destination: 'Shopping list' as const,
         })),
@@ -1563,7 +1980,7 @@ function ScheduleView(props: SectionProps) {
           date: String(item.expiryDate),
           kind: 'Expiry' as const,
           title: item.name,
-          detail: `${item.quantity} ${item.unit} · ${item.location}`,
+          detail: `${formatQuantity(item.quantity)} ${item.unit} · ${item.location}`,
           time: null,
           destination: 'Expiry' as const,
         })),
@@ -2221,7 +2638,11 @@ function PurchasesView(props: SectionProps) {
           title="Purchase history"
           subtitle="Every purchase also creates inventory and expense records"
         />
-        <PurchaseTable purchases={props.purchases} onDelete={props.onDelete} />
+        <PurchaseTable
+          purchases={props.purchases}
+          onDelete={props.onDelete}
+          onEdit={props.onEditPurchase}
+        />
         <EmptyState
           action="Add first purchase"
           icon={<PackagePlus size={24} />}
@@ -2368,14 +2789,93 @@ function CategoriesView(props: SectionProps) {
   );
 }
 
-const storageLocations = [
-  'Fridge',
-  'Freezer',
-  'Pantry',
-  'Drawer',
-  'Cabinet',
-  'Storage Box',
-] as const;
+function LocationsView(props: SectionProps) {
+  const totalItems = props.locationRecords.reduce(
+    (sum, location) => sum + location.itemCount,
+    0,
+  );
+  const unused = props.locationRecords.filter(
+    (location) => location.itemCount === 0,
+  ).length;
+
+  return (
+    <div className="categories-view">
+      <section className="summary-grid category-summary-grid">
+        <SummaryCard
+          icon={<MapPin size={20} />}
+          label="Storage locations"
+          note="Available across inventory and purchases"
+          value={String(props.locationRecords.length)}
+        />
+        <SummaryCard
+          icon={<Box size={20} />}
+          label="Stored items"
+          note="Current inventory batches"
+          value={String(totalItems)}
+        />
+        <SummaryCard
+          icon={<Check size={20} />}
+          label="Unused locations"
+          note="Safe to remove if no longer needed"
+          value={String(unused)}
+        />
+      </section>
+      <section className="panel category-panel">
+        <PanelHeading
+          action="New location"
+          onAction={props.onAddLocation}
+          subtitle="Rename a location to update every linked inventory item"
+          title="All locations"
+        />
+        {props.locationRecords.length ? (
+          <div className="category-card-grid">
+            {props.locationRecords.map((location) => (
+              <article className="category-card" key={location.id}>
+                <span className="category-card-icon" aria-hidden="true">
+                  <MapPin size={20} />
+                </span>
+                <div>
+                  <strong>{location.name}</strong>
+                  <small>
+                    {location.itemCount}{' '}
+                    {location.itemCount === 1 ? 'item' : 'items'}
+                  </small>
+                </div>
+                <div className="category-card-actions">
+                  <button
+                    aria-label={`Rename ${location.name}`}
+                    onClick={() => props.onEditLocation(location)}
+                    title="Rename location"
+                    type="button"
+                  >
+                    <Pencil size={15} />
+                  </button>
+                  <button
+                    aria-label={`Delete ${location.name}`}
+                    onClick={() => props.onDeleteLocation(location)}
+                    title="Delete location"
+                    type="button"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            action="Create location"
+            icon={<MapPin size={24} />}
+            onAction={props.onAddLocation}
+            show
+            text="Create a location or clear the current search."
+            title="No locations found"
+          />
+        )}
+      </section>
+    </div>
+  );
+}
 
 function StorageView(props: SectionProps) {
   const [storageSearch, setStorageSearch] = useState('');
@@ -2384,12 +2884,7 @@ function StorageView(props: SectionProps) {
   const [statusFilter, setStatusFilter] = useState('All status');
   const availableLocations = [
     'All locations',
-    ...Array.from(
-      new Set([
-        ...storageLocations,
-        ...props.inventory.map((item) => item.location),
-      ]),
-    ),
+    ...props.productLocations.map((location) => location.name),
   ];
   const availableCategories = [
     'All categories',
@@ -2408,9 +2903,11 @@ function StorageView(props: SectionProps) {
       (statusFilter === 'All status' || status === statusFilter)
     );
   });
-  const breakdown = storageLocations.map((location) => ({
-    location,
-    count: props.inventory.filter((item) => item.location === location).length,
+  const breakdown = props.productLocations.map((location) => ({
+    location: location.name,
+    count: props.inventory.filter(
+      (item) => item.location.toLowerCase() === location.name.toLowerCase(),
+    ).length,
   }));
   const mostUsed = [...breakdown].sort((a, b) => b.count - a.count);
   const maxLocation = Math.max(...mostUsed.map((row) => row.count), 1);
@@ -2480,7 +2977,7 @@ function StorageView(props: SectionProps) {
         aria-label="Storage locations summary"
         className="storage-summary-grid"
       >
-        {storageLocations.map((location, index) => {
+        {props.productLocations.map(({ name: location }, index) => {
           const items = props.inventory.filter(
             (item) => item.location === location,
           );
@@ -2626,7 +3123,7 @@ function StorageTable({
                   </span>
                 </td>
                 <td>
-                  {item.quantity} {item.unit}
+                  {formatQuantity(item.quantity)} {item.unit}
                 </td>
                 <td>{item.location}</td>
                 <td>{item.specificSpot || '—'}</td>
@@ -2967,7 +3464,11 @@ function MealThumb({ meal }: { meal: MealPlan }) {
 }
 
 function ShoppingView(props: SectionProps) {
-  const completed = props.shopping.filter((item) => item.completed).length;
+  const [showCompleted, setShowCompleted] = useState(false);
+  const completedItems = props.shopping
+    .filter((item) => item.completed)
+    .sort(compareShopping);
+  const completed = completedItems.length;
   const today = todayIso();
   const weekDates = Array.from({ length: 7 }, (_, index) =>
     addDaysIso(today, index),
@@ -2996,6 +3497,15 @@ function ShoppingView(props: SectionProps) {
   );
   const typicalWeek = props.monthlyBudget / 4.33;
   const progress = Math.min((estimatedTotal / typicalWeek) * 100, 100);
+
+  function revealCompletedItems() {
+    setShowCompleted(true);
+    window.requestAnimationFrame(() =>
+      document
+        .getElementById('completed-shopping-items')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }),
+    );
+  }
 
   return (
     <div className="shopping-schedule-view">
@@ -3049,7 +3559,7 @@ function ShoppingView(props: SectionProps) {
                       <span>
                         <strong>{item.name}</strong>
                         <small>
-                          {item.quantity} {item.unit}
+                          {formatQuantity(item.quantity)} {item.unit}
                         </small>
                       </span>
                     </label>
@@ -3089,10 +3599,83 @@ function ShoppingView(props: SectionProps) {
           action="Schedule first item"
           icon={<ShoppingBasket size={24} />}
           onAction={() => props.onScheduleShopping(props.selectedShoppingDate)}
-          show={props.shopping.length === 0}
-          text="Choose a day and plan what your household needs."
-          title="Nothing scheduled yet"
+          show={openItems.length === 0}
+          text={
+            completed
+              ? 'Everything is completed. Open Completed items below to review or restore an item.'
+              : 'Choose a day and plan what your household needs.'
+          }
+          title={completed ? 'All items completed' : 'Nothing scheduled yet'}
         />
+        {completed > 0 && (
+          <section
+            className="panel completed-shopping-panel"
+            id="completed-shopping-items"
+          >
+            <button
+              aria-expanded={showCompleted}
+              className="completed-shopping-toggle"
+              onClick={() => setShowCompleted((visible) => !visible)}
+              type="button"
+            >
+              <span>
+                <Check size={18} />
+                <strong>Completed items</strong>
+                <small>{completed} saved</small>
+              </span>
+              <ChevronRight
+                className={showCompleted ? 'expanded' : ''}
+                size={18}
+              />
+            </button>
+            {showCompleted && (
+              <div className="completed-shopping-list">
+                {completedItems.map((item) => (
+                  <article className="completed-shopping-item" key={item.id}>
+                    <span className="completed-check">
+                      <Check size={15} />
+                    </span>
+                    <div>
+                      <strong>{item.name}</strong>
+                      <small>
+                        {formatQuantity(item.quantity)} {item.unit} ·{' '}
+                        {item.scheduledDate
+                          ? shoppingGroupLabel(item.scheduledDate)
+                          : 'Unscheduled'}
+                      </small>
+                    </div>
+                    <strong className="scheduled-price">
+                      {item.estimatedPrice === null
+                        ? 'Price not set'
+                        : sar(item.estimatedPrice)}
+                    </strong>
+                    <div className="scheduled-actions">
+                      <button
+                        onClick={() => props.onToggleShopping(item)}
+                        type="button"
+                      >
+                        <RotateCcw size={15} /> Restore
+                      </button>
+                      <button
+                        aria-label={'Delete ' + item.name}
+                        onClick={() =>
+                          props.onDelete({
+                            kind: 'shopping',
+                            id: item.id,
+                            name: item.name,
+                          })
+                        }
+                        type="button"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
       </section>
       <aside className="shopping-schedule-aside">
         <section className="panel week-summary-card">
@@ -3115,7 +3698,18 @@ function ShoppingView(props: SectionProps) {
               <dt>To buy</dt>
               <dd>{openItems.length}</dd>
             </div>
-            <div>
+            <div
+              className="completed-summary-link"
+              onClick={revealCompletedItems}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  revealCompletedItems();
+                }
+              }}
+              role="button"
+              tabIndex={0}
+            >
               <dt>Completed</dt>
               <dd>{completed}</dd>
             </div>
@@ -3674,7 +4268,7 @@ function InventoryTable({
                   </span>
                 </td>
                 <td>
-                  {item.quantity} {item.unit}
+                  {formatQuantity(item.quantity)} {item.unit}
                 </td>
                 <td>{item.location}</td>
                 <td>
@@ -3748,9 +4342,11 @@ function InventoryTable({
 function PurchaseTable({
   purchases,
   onDelete,
+  onEdit,
 }: {
   purchases: Purchase[];
   onDelete: (target: DeleteTarget) => void;
+  onEdit: (purchase: Purchase) => void;
 }) {
   if (!purchases.length) return null;
   return (
@@ -3805,7 +4401,7 @@ function PurchaseTable({
                 </td>
                 <td>{dateLabel(purchase.purchasedAt)}</td>
                 <td>
-                  {purchase.quantity} {purchase.unit}
+                  {formatQuantity(purchase.quantity)} {purchase.unit}
                 </td>
                 <td>{purchase.store || '—'}</td>
                 <td>
@@ -3829,6 +4425,13 @@ function PurchaseTable({
                 </td>
                 <td>
                   <div className="row-actions">
+                    <button
+                      aria-label={`Edit ${purchase.itemName} purchase`}
+                      onClick={() => onEdit(purchase)}
+                      type="button"
+                    >
+                      <Pencil size={15} />
+                    </button>
                     <button
                       aria-label={`Delete ${purchase.itemName} purchase`}
                       onClick={() =>
@@ -3939,7 +4542,7 @@ function ShoppingRows({
             <span className="shopping-row-copy">
               <strong>{item.name}</strong>
               <small>
-                {item.quantity} {item.unit}
+                {formatQuantity(item.quantity)} {item.unit}
                 {item.scheduledDate
                   ? ' · ' + dayMonthShort(item.scheduledDate)
                   : ' · Unscheduled'}
@@ -3989,7 +4592,7 @@ function ExpiryCard({
       <div>
         <strong>{item.name}</strong>
         <small>
-          {item.quantity} {item.unit} · {item.location}
+          {formatQuantity(item.quantity)} {item.unit} · {item.location}
         </small>
         <p>{dateLabel(String(item.expiryDate))}</p>
       </div>
@@ -4317,14 +4920,14 @@ function MealDialog({
                   Qty
                   <input
                     aria-label={`Ingredient ${index + 1} quantity`}
-                    min="0.01"
+                    min="0.001"
                     onChange={(event) =>
                       updateIngredient(row.key, {
                         quantity: event.target.value,
                       })
                     }
                     required={Boolean(row.name)}
-                    step="0.01"
+                    step="0.001"
                     type="number"
                     value={row.quantity}
                   />
@@ -4353,7 +4956,8 @@ function MealDialog({
                     <option value="">Not linked</option>
                     {inventory.map((item) => (
                       <option key={item.id} value={item.id}>
-                        {item.name} · {item.quantity} {item.unit}
+                        {item.name} · {formatQuantity(item.quantity)}{' '}
+                        {item.unit}
                       </option>
                     ))}
                   </select>
@@ -4474,10 +5078,10 @@ function ShoppingScheduleDialog({
               <input
                 defaultValue={editingItem?.quantity ?? 1}
                 id="scheduled-quantity"
-                min="0.01"
+                min="0.001"
                 name="quantity"
                 required
-                step="0.01"
+                step="0.001"
                 type="number"
               />
             </label>
@@ -4577,7 +5181,7 @@ function RemoveStockDialog({
               {item.brand ? ` · ${item.brand}` : ''}
             </strong>
             <small>
-              Current quantity: {item.quantity} {item.unit}
+              Current quantity: {formatQuantity(item.quantity)} {item.unit}
             </small>
           </span>
         </div>
@@ -4589,10 +5193,10 @@ function RemoveStockDialog({
                 autoFocus
                 id="stock-remove-quantity"
                 max={item.quantity}
-                min="0.01"
+                min="0.001"
                 name="quantity"
                 required
-                step="0.01"
+                step="0.001"
                 type="number"
               />
               <span>{item.unit}</span>
@@ -4678,8 +5282,8 @@ function StockHistoryDialog({
           <h2 id="stock-history-dialog-title">Stock history</h2>
           <p>
             {item.name}
-            {item.brand ? ` · ${item.brand}` : ''} · {item.quantity} {item.unit}{' '}
-            currently available
+            {item.brand ? ` · ${item.brand}` : ''} ·{' '}
+            {formatQuantity(item.quantity)} {item.unit} currently available
           </p>
         </header>
         {loading ? (
@@ -4691,15 +5295,22 @@ function StockHistoryDialog({
             {rows.map((row) => (
               <article key={row.id}>
                 <span
-                  className={row.quantityChange > 0 ? 'stock-in' : 'stock-out'}
+                  className={
+                    row.quantityChange > 0
+                      ? 'stock-in'
+                      : row.quantityChange < 0
+                        ? 'stock-out'
+                        : 'stock-neutral'
+                  }
                 >
                   {row.quantityChange > 0 ? '+' : ''}
-                  {row.quantityChange} {row.unit}
+                  {formatQuantity(row.quantityChange)} {row.unit}
                 </span>
                 <div>
                   <strong>{stockReasonLabel(row.reason)}</strong>
                   <small>
-                    {row.quantityBefore} → {row.quantityAfter} {row.unit}
+                    {formatQuantity(row.quantityBefore)} →{' '}
+                    {formatQuantity(row.quantityAfter)} {row.unit}
                     {row.note ? ` · ${row.note}` : ''}
                   </small>
                 </div>
@@ -4828,14 +5439,129 @@ function CategoryDeleteDialog({
   );
 }
 
+function LocationDialog({
+  editingLocation,
+  onClose,
+  onSubmit,
+}: {
+  editingLocation: ProductLocation | null;
+  onClose: () => void;
+  onSubmit: (event: SyntheticEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <div className="dialog-overlay">
+      <dialog
+        aria-labelledby="location-dialog-title"
+        className="inventory-dialog category-dialog"
+        open
+      >
+        <button
+          aria-label="Close location dialog"
+          className="dialog-close"
+          onClick={onClose}
+          type="button"
+        >
+          <X size={17} />
+        </button>
+        <header className="dialog-header">
+          <h2 id="location-dialog-title">
+            {editingLocation ? 'Rename location' : 'New location'}
+          </h2>
+          <p>
+            {editingLocation
+              ? 'Linked inventory and purchase records will update together.'
+              : 'The location will be available in inventory and purchase forms.'}
+          </p>
+        </header>
+        <form className="dialog-form" onSubmit={onSubmit}>
+          <label htmlFor="location-name">
+            Location name
+            <input
+              autoFocus
+              defaultValue={editingLocation?.name}
+              id="location-name"
+              maxLength={60}
+              name="name"
+              placeholder="e.g. Fridge"
+              required
+            />
+          </label>
+          <button className="primary-button dialog-submit" type="submit">
+            {editingLocation ? 'Save name' : 'Create location'}
+          </button>
+        </form>
+      </dialog>
+    </div>
+  );
+}
+
+function LocationDeleteDialog({
+  location,
+  onCancel,
+  onConfirm,
+}: {
+  location: ProductLocation;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const isLinked = location.itemCount > 0;
+  return (
+    <div className="dialog-overlay">
+      <dialog
+        aria-labelledby="location-delete-title"
+        className="inventory-dialog confirm-dialog"
+        open
+      >
+        <div className="confirm-icon">
+          <AlertTriangle size={22} />
+        </div>
+        <h2 id="location-delete-title">
+          {isLinked ? 'Location is still in use' : 'Delete location?'}
+        </h2>
+        <p>
+          {isLinked
+            ? `${location.name} is linked to ${location.itemCount} ${location.itemCount === 1 ? 'inventory item' : 'inventory items'}. Rename it or move those items to another location first.`
+            : `${location.name} is not linked to inventory. You can safely remove it.`}
+        </p>
+        <div className="confirm-actions">
+          {isLinked ? (
+            <button className="primary-button" onClick={onCancel} type="button">
+              Close
+            </button>
+          ) : (
+            <>
+              <button
+                className="secondary-button"
+                onClick={onCancel}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="danger-button"
+                onClick={onConfirm}
+                type="button"
+              >
+                Delete location
+              </button>
+            </>
+          )}
+        </div>
+      </dialog>
+    </div>
+  );
+}
+
 function ItemDialog({
   categories,
   editingItem,
+  locations,
   onClose,
   onSubmit,
 }: {
   categories: ProductCategory[];
   editingItem: InventoryItem | null;
+  locations: ProductLocation[];
   onClose: () => void;
   onSubmit: (event: SyntheticEvent<HTMLFormElement>) => void;
 }) {
@@ -4844,7 +5570,9 @@ function ItemDialog({
   );
   const [brand, setBrand] = useState(editingItem?.brand ?? '');
   const [unit, setUnit] = useState(editingItem?.unit ?? 'kg');
-  const [location, setLocation] = useState(editingItem?.location ?? 'Fridge');
+  const [location, setLocation] = useState(
+    editingItem?.location ?? locations[0]?.name ?? '',
+  );
   const [specificSpot, setSpecificSpot] = useState(
     editingItem?.specificSpot ?? '',
   );
@@ -4906,10 +5634,10 @@ function ItemDialog({
               <input
                 defaultValue={editingItem?.quantity}
                 id="item-quantity"
-                min="0.01"
+                min="0.001"
                 name="quantity"
                 required
-                step="0.01"
+                step="0.001"
                 type="number"
               />
             </label>
@@ -4953,19 +5681,20 @@ function ItemDialog({
             <label htmlFor="item-location">
               Location
               <select
+                disabled={!locations.length}
                 id="item-location"
                 name="location"
                 onChange={(event) => setLocation(event.target.value)}
                 required
                 value={location}
               >
-                {storageLocations.map((location) => (
-                  <option key={location}>{location}</option>
+                {locations.map((item) => (
+                  <option key={item.id}>{item.name}</option>
                 ))}
-                <option>Kitchen</option>
-                <option>Storage</option>
-                <option>Bathroom</option>
               </select>
+              {!locations.length && (
+                <small>Create a location before saving inventory.</small>
+              )}
             </label>
           </div>
           <div className="form-grid">
@@ -5000,19 +5729,29 @@ function ItemDialog({
 
 function PurchaseDialog({
   categories,
+  editingPurchase,
+  locations,
   onClose,
   onSubmit,
 }: {
   categories: ProductCategory[];
+  editingPurchase: Purchase | null;
+  locations: ProductLocation[];
   onClose: () => void;
   onSubmit: (event: SyntheticEvent<HTMLFormElement>) => void;
 }) {
   const today = new Date().toISOString().slice(0, 10);
-  const [category, setCategory] = useState(categories[0]?.name ?? '');
-  const [brand, setBrand] = useState('');
-  const [unit, setUnit] = useState('kg');
-  const [location, setLocation] = useState('Fridge');
-  const [specificSpot, setSpecificSpot] = useState('');
+  const [category, setCategory] = useState(
+    editingPurchase?.category ?? categories[0]?.name ?? '',
+  );
+  const [brand, setBrand] = useState(editingPurchase?.brand ?? '');
+  const [unit, setUnit] = useState(editingPurchase?.unit ?? 'kg');
+  const [location, setLocation] = useState(
+    editingPurchase?.location ?? locations[0]?.name ?? '',
+  );
+  const [specificSpot, setSpecificSpot] = useState(
+    editingPurchase?.specificSpot ?? '',
+  );
 
   function applyProduct(product: ProductSuggestion) {
     setBrand(product.brand ?? '');
@@ -5038,13 +5777,20 @@ function PurchaseDialog({
           <X size={17} />
         </button>
         <header className="dialog-header">
-          <h2 id="purchase-dialog-title">Add purchase</h2>
-          <p>One entry updates inventory, expenses and price history.</p>
+          <h2 id="purchase-dialog-title">
+            {editingPurchase ? 'Edit purchase' : 'Add purchase'}
+          </h2>
+          <p>
+            {editingPurchase
+              ? 'Inventory, expense and stock history will stay consistent.'
+              : 'One entry updates inventory, expenses and price history.'}
+          </p>
         </header>
         <form className="dialog-form" onSubmit={onSubmit}>
           <div className="dialog-field">
             <label htmlFor="purchase-item-name">Item name</label>
             <ProductNameAutocomplete
+              defaultValue={editingPurchase?.itemName}
               id="purchase-item-name"
               name="itemName"
               onProductSelect={applyProduct}
@@ -5066,11 +5812,12 @@ function PurchaseDialog({
             <label htmlFor="purchase-quantity">
               Quantity
               <input
+                defaultValue={editingPurchase?.quantity}
                 id="purchase-quantity"
-                min="0.01"
+                min="0.001"
                 name="quantity"
                 required
-                step="0.01"
+                step="0.001"
                 type="number"
               />
             </label>
@@ -5096,6 +5843,7 @@ function PurchaseDialog({
             <label htmlFor="purchase-price">
               Total price (SAR)
               <input
+                defaultValue={editingPurchase?.totalPrice}
                 id="purchase-price"
                 min="0.01"
                 name="totalPrice"
@@ -5108,7 +5856,7 @@ function PurchaseDialog({
             <label htmlFor="purchase-date">
               Purchase date
               <input
-                defaultValue={today}
+                defaultValue={editingPurchase?.purchasedAt ?? today}
                 id="purchase-date"
                 name="purchasedAt"
                 required
@@ -5138,25 +5886,31 @@ function PurchaseDialog({
             <label htmlFor="purchase-location">
               Store in
               <select
+                disabled={!locations.length}
                 id="purchase-location"
                 name="location"
                 onChange={(event) => setLocation(event.target.value)}
                 required
                 value={location}
               >
-                {storageLocations.map((location) => (
-                  <option key={location}>{location}</option>
+                {locations.map((item) => (
+                  <option key={item.id}>{item.name}</option>
                 ))}
-                <option>Kitchen</option>
-                <option>Storage</option>
-                <option>Bathroom</option>
               </select>
+              {!locations.length && (
+                <small>Create a location before saving purchases.</small>
+              )}
             </label>
           </div>
           <div className="form-grid">
             <label htmlFor="purchase-expiry">
               Expiry date <span>(optional)</span>
-              <input id="purchase-expiry" name="expiryDate" type="date" />
+              <input
+                defaultValue={editingPurchase?.expiryDate ?? ''}
+                id="purchase-expiry"
+                name="expiryDate"
+                type="date"
+              />
             </label>
             <label htmlFor="purchase-specific-spot">
               Specific spot <span>(optional)</span>
@@ -5172,6 +5926,7 @@ function PurchaseDialog({
           <label htmlFor="purchase-store">
             Shop or store <span>(optional)</span>
             <input
+              defaultValue={editingPurchase?.store ?? ''}
               id="purchase-store"
               name="store"
               placeholder="e.g. Lulu Hypermarket"
@@ -5180,12 +5935,13 @@ function PurchaseDialog({
           <div className="purchase-save-note">
             <Check size={17} />
             <span>
-              This will create an inventory batch and a matching grocery
-              expense.
+              {editingPurchase
+                ? 'Changes are recorded as a new stock-history adjustment.'
+                : 'This will create an inventory batch and a matching grocery expense.'}
             </span>
           </div>
           <button className="primary-button dialog-submit" type="submit">
-            Save purchase
+            {editingPurchase ? 'Save changes' : 'Save purchase'}
           </button>
         </form>
       </dialog>

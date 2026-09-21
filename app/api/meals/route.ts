@@ -2,6 +2,7 @@ import { and, asc, eq } from 'drizzle-orm';
 import { getDb, getDbBinding } from '@/db';
 import { inventoryItems, mealIngredients, mealPlans } from '@/db/schema';
 import { requireApiContext } from '@/lib/auth';
+import { isValidQuantity, roundQuantity } from '@/lib/quantity';
 
 type IngredientInput = {
   name?: unknown;
@@ -208,7 +209,7 @@ function parseMeal(body: Record<string, unknown>) {
   const ingredients = rows
     .map((row) => ({
       name: textField(row.name),
-      quantity: Number(row.quantity ?? 1),
+      quantity: roundQuantity(Number(row.quantity ?? 1)),
       unit: textField(row.unit) || 'pcs',
       inventoryItemId:
         row.inventoryItemId === '' || row.inventoryItemId == null
@@ -222,8 +223,7 @@ function parseMeal(body: Record<string, unknown>) {
     .filter((row) => row.name);
   const invalid = ingredients.some(
     (row) =>
-      !Number.isFinite(row.quantity) ||
-      row.quantity <= 0 ||
+      !isValidQuantity(row.quantity) ||
       (row.inventoryItemId !== null &&
         !Number.isInteger(row.inventoryItemId)) ||
       (row.estimatedPrice !== null &&

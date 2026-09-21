@@ -7,6 +7,7 @@ import {
   shoppingItems,
 } from '@/db/schema';
 import { requireApiContext } from '@/lib/auth';
+import { addQuantities, subtractQuantities } from '@/lib/quantity';
 
 export async function POST(request: Request) {
   const context = await requireApiContext(request, 'write');
@@ -78,13 +79,16 @@ export async function POST(request: Request) {
     const available = ingredient.inventoryItemId
       ? (stock.get(ingredient.inventoryItemId)?.quantity ?? 0)
       : 0;
-    const quantity = Math.max(ingredient.quantity - available, 0);
+    const quantity = Math.max(
+      subtractQuantities(ingredient.quantity, available),
+      0,
+    );
     if (quantity <= 0) continue;
     const key = `${ingredient.name.toLowerCase()}|${ingredient.unit}|${scheduledDate}`;
     if (existingKeys.has(key)) continue;
     const current = missing.get(key);
     if (current) {
-      current.quantity += quantity;
+      current.quantity = addQuantities(current.quantity, quantity);
       if (ingredient.estimatedPrice !== null)
         current.estimatedPrice =
           (current.estimatedPrice ?? 0) + ingredient.estimatedPrice;

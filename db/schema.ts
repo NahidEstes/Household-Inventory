@@ -186,6 +186,41 @@ export const inventoryItems = sqliteTable(
   ],
 );
 
+// Essentials are product-level reorder rules, not another source of stock.
+// A product can have several inventory batches with different expiry dates.
+export const essentialItems = sqliteTable(
+  'essential_items',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    householdId: integer('household_id')
+      .notNull()
+      .references(() => households.id),
+    name: text('name').notNull(),
+    normalizedName: text('normalized_name').notNull(),
+    brand: text('brand'),
+    normalizedBrand: text('normalized_brand').notNull().default(''),
+    unit: text('unit').notNull(),
+    minimumStock: real('minimum_stock').notNull(),
+    minimumStockUnit: text('minimum_stock_unit').notNull(),
+    autoAddToShoppingList: integer('auto_add_to_shopping_list', {
+      mode: 'boolean',
+    })
+      .notNull()
+      .default(false),
+    createdAt: text('created_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex('idx_essential_items_household_product_unit').on(
+      table.householdId,
+      table.normalizedName,
+      table.normalizedBrand,
+      table.unit,
+    ),
+  ],
+);
+
 export const productCategories = sqliteTable(
   'product_categories',
   {
@@ -199,6 +234,25 @@ export const productCategories = sqliteTable(
   },
   (table) => [
     uniqueIndex('idx_product_categories_household_normalized_name').on(
+      table.householdId,
+      table.normalizedName,
+    ),
+  ],
+);
+
+export const productLocations = sqliteTable(
+  'product_locations',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    name: text('name').notNull(),
+    normalizedName: text('normalized_name').notNull(),
+    householdId: integer('household_id').references(() => households.id),
+    createdAt: text('created_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex('idx_product_locations_household_normalized_name').on(
       table.householdId,
       table.normalizedName,
     ),
@@ -393,6 +447,9 @@ export const householdSettings = sqliteTable(
     householdId: integer('household_id').references(() => households.id),
     householdName: text('household_name').notNull().default('My Household'),
     monthlyBudget: real('monthly_budget').notNull().default(30000),
+    autoAddEssentials: integer('auto_add_essentials', { mode: 'boolean' })
+      .notNull()
+      .default(false),
     updatedAt: text('updated_at')
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
